@@ -220,7 +220,7 @@ OK, final results:
 
 ![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/51ca50d6-c032-4d50-bcf8-d5dfea2d3747/254b93e5-6935-463c-aa5d-a795e06d591f/Untitled.png)
 
-Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and I’m not sure why - maybe it’s just noise ([https://stefan-marr.de/2020/07/is-this-noise-or-does-this-mean-something-benchmarking/](https://stefan-marr.de/2020/07/is-this-noise-or-does-this-mean-something-benchmarking/)).
+Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and I’m not sure why - ([maybe it’s just noise.](https://stefan-marr.de/2020/07/is-this-noise-or-does-this-mean-something-benchmarking/)).
 
 
 ---

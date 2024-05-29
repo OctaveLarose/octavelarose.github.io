@@ -3,8 +3,8 @@
 #   name: Octave Larose
 #   email: octave.larose@hotmail.com
 
-description: >
-  Personal website of Octave Larose.
+# description: >
+#   Personal website of Octave Larose.
 
 header_pages:
   - about.md
