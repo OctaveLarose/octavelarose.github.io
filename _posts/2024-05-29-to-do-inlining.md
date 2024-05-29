@@ -15,13 +15,13 @@ Though one question we received a lot was: are AST interpreters only good on met
 
 So I’m trying, with Rust specifically, to get interpreters to perform as well as our existing ones - maybe better??? As part of his MsC here at the University of Kent, [Nicolas Polomack](https://polomack.eu/) wrote the ([som-rs interpreters](https://github.com/hirevo/som-rs)), one being AST-based and the other BC-based, and he honestly did a tremendous job. However, the focus wasn’t so much on performance, and there’s a lot of effort needed to push it further. How much exactly? Well, here’s how much I improved the performance of the AST and BC interpreters after a few months of implementing various optimizations and fixing performance bugs:
 
-![speedup compared to base project](../assets/2024-05-29-to-do-inlining/speedup_compared_to_main_repo.png.png)
+![speedup compared to base project](/assets/2024-05-29-to-do-inlining/speedup_compared_to_main_repo.png)
 
 A bit more than a 2x speedup or so on both, not bad. Small disclaimer: only showing results on our micro benchmarks for my own convenience, but results are extremely similar on our macro benchmarks.
 
 And this is where we’re currently at, compared to the interpreters we used in our paper:
 
-![compare-all-interps](../assets/2024-05-29-to-do-inlining/comparing_every_interp.png)
+![compare-all-interps](/assets/2024-05-29-to-do-inlining/comparing_every_interp.png)
 
 A long ways to go still... The BC one is getting there, progress with the AST one is slower for various reasons, including Rust limitations - there’s some interesting stuff to talk about there, maybe in a future blog post.
 
@@ -144,7 +144,7 @@ So we need to call POP after each block. The issue is that with our current inte
 
 OK, here’s a fix: add an `am_i_ugly` flag to every frame, set it to `true` only for these specific `to:do:` frames, and whenever we pop a frame (i.e. we return from a block/function) if the frame had that flag, we pop a value off the stack to ignore its output. And that works pretty damn well: look at that speedup!
 
-![after ugly changes](../assets/2024-05-29-to-do-inlining/ugly_changes_1.png)
+![after ugly changes](/assets/2024-05-29-to-do-inlining/ugly_changes_1.png)
 
 But I’ve got two major issues:
 
@@ -153,7 +153,7 @@ But I’ve got two major issues:
 
 It’s a working solution though, so I went ahead and implemented the other variations like `to:by:do:` and `downTo:do:` and whatnot, to see what the total speedup was like. Which would be this:
 
-![after ugly changes 2](../assets/2024-05-29-to-do-inlining/ugly_changes_2.png)
+![after ugly changes 2](/assets/2024-05-29-to-do-inlining/ugly_changes_2.png)
 
 Looks reaaal good. A 100% speedup on one of our benchmarks even (one whose runtime is extremely dominated by a `to:by:do:` call)! The code sucks, but we’re at least on the right track.
 
@@ -218,15 +218,12 @@ So we keep our previous solution of creating modified blocks at runtime.
 
 OK, final results:
 
-![final results](../assets/2024-05-29-to-do-inlining/final_results.png)
+![final results](/assets/2024-05-29-to-do-inlining/final_results.png)
 
-Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and I’m not sure why - ([maybe it’s just noise.](https://stefan-marr.de/2020/07/is-this-noise-or-does-this-mean-something-benchmarking/)).
-
-
----
+Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and I’m not sure why - ([maybe it’s just noise](https://stefan-marr.de/2020/07/is-this-noise-or-does-this-mean-something-benchmarking/)).
 
 
-So what have we learned?
+## so what have we learned?
 
 - being mindful of the design of the interpreter itself matters, unsurprisingly. Choosing to have a single execution of a massive bytecode loop function, as opposed to designing the interpreter such that the bytecode loop function is invoked for each method call, makes things _much_ harder in this context.
     - PL implementation hotshots reading this might roll their eyes at the decision of having a single function execution for the bytecode loop, even: it’s hard for me to tell since I’m lacking experience. Let me know more reasons why that’s a bad idea!
