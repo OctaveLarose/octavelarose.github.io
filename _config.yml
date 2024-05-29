@@ -1,11 +1,17 @@
 title: Octave Larose
-author:
-  octave.larose@hotmail.fr
+author: octave.larose@hotmail.fr
   # name: Octave Larose
   # email: octave.larose@hotmail.com
-
 description: >
   My own personal website, with my own personal views and random thoughts.
+twitter_username: OctaveLarose
+github_username:  OctaveLarose
+
+
+# Build settings
+theme: minima
+plugins:
+  - jekyll-feed
 
 header_pages:
   - about.md
