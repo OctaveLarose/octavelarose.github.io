@@ -9,4 +9,4 @@ description: >
 header_pages:
   - about.md
 
-theme: jekyll-theme-minima
+theme: minima
