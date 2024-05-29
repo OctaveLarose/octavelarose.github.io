@@ -15,13 +15,13 @@ Though one question we received a lot was: are AST interpreters only good on met
 
 So I’m trying, with Rust specifically, to get interpreters to perform as well as our existing ones - maybe better??? As part of his MsC here at the University of Kent, [Nicolas Polomack](https://polomack.eu/) wrote the ([som-rs interpreters](https://github.com/hirevo/som-rs)), one being AST-based and the other BC-based, and he honestly did a tremendous job. However, the focus wasn’t so much on performance, and there’s a lot of effort needed to push it further. How much exactly? Well, here’s how much I improved the performance of the AST and BC interpreters after a few months of implementing various optimizations and fixing performance bugs:
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/51ca50d6-c032-4d50-bcf8-d5dfea2d3747/e028cba8-a81d-400a-85a5-7d66d2f711c8/Untitled.png)
+![speedup compared to base project](../assets/2024-05-29-to-do-inlining/speedup_compared_to_main_repo.png.png)
 
 A bit more than a 2x speedup or so on both, not bad. Small disclaimer: only showing results on our micro benchmarks for my own convenience, but results are extremely similar on our macro benchmarks.
 
 And this is where we’re currently at, compared to the interpreters we used in our paper:
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/51ca50d6-c032-4d50-bcf8-d5dfea2d3747/df4a2330-387d-4c20-87c3-d296ce87cd51/Untitled.png)
+![compare-all-interps](../assets/2024-05-29-to-do-inlining/comparing_every_interp.png)
 
 A long ways to go still... The BC one is getting there, progress with the AST one is slower for various reasons, including Rust limitations - there’s some interesting stuff to talk about there, maybe in a future blog post.
 
@@ -144,7 +144,7 @@ So we need to call POP after each block. The issue is that with our current inte
 
 OK, here’s a fix: add an `am_i_ugly` flag to every frame, set it to `true` only for these specific `to:do:` frames, and whenever we pop a frame (i.e. we return from a block/function) if the frame had that flag, we pop a value off the stack to ignore its output. And that works pretty damn well: look at that speedup!
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/51ca50d6-c032-4d50-bcf8-d5dfea2d3747/fc6fa182-72c5-430a-ae0e-6b63aa41b69e/Untitled.png)
+![after ugly changes](../assets/2024-05-29-to-do-inlining/ugly_changes_1.png)
 
 But I’ve got two major issues:
 
@@ -153,7 +153,7 @@ But I’ve got two major issues:
 
 It’s a working solution though, so I went ahead and implemented the other variations like `to:by:do:` and `downTo:do:` and whatnot, to see what the total speedup was like. Which would be this:
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/51ca50d6-c032-4d50-bcf8-d5dfea2d3747/d51c1ab7-bcfa-49c1-a744-8ebed79b9166/Untitled.png)
+![after ugly changes 2](../assets/2024-05-29-to-do-inlining/ugly_changes_2.png)
 
 Looks reaaal good. A 100% speedup on one of our benchmarks even (one whose runtime is extremely dominated by a `to:by:do:` call)! The code sucks, but we’re at least on the right track.
 
@@ -218,7 +218,7 @@ So we keep our previous solution of creating modified blocks at runtime.
 
 OK, final results:
 
-![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/51ca50d6-c032-4d50-bcf8-d5dfea2d3747/254b93e5-6935-463c-aa5d-a795e06d591f/Untitled.png)
+![final results](../assets/2024-05-29-to-do-inlining/final_results.png)
 
 Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and I’m not sure why - ([maybe it’s just noise.](https://stefan-marr.de/2020/07/is-this-noise-or-does-this-mean-something-benchmarking/)).
 
@@ -235,6 +235,10 @@ So what have we learned?
 - Aaaand the quick and easy solution is rarely quick or easy. This was never meant to be so arduous - this whole “let’s make a primitive function” idea was meant to take an hour tops to avoid spending a couple hours implementing it at the bytecode level, but it ended up taking much longer! I don’t think I could have easily predicted this seemingly easy change would be so hard: this requires a lot of knowledge about the system you’re working with and about interpreter design, yet I’m but a humble PhD student. We’re getting there though.
 
 That’s it. More in the future. xoxo
+
+
+---
+
 
 [^stockholm-syndrome]: [https://en.wikipedia.org/wiki/Stockholm_syndrome](https://en.wikipedia.org/wiki/Stockholm_syndrome)
 
