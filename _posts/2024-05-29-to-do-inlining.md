@@ -13,7 +13,7 @@ My PhD is on the runtime performance of AST interpreters: my job is to try to ma
 
 Though one question we received a lot was: are AST interpreters only good on meta-compilation systems that rely on higher-level languages, and not REAL PROGRAMMING LANGUAGES like C or Rust where I can do all my fancy optimizations?
 
-So I’m trying, with Rust specifically, to get interpreters to perform as well as our existing ones - maybe better??? As part of his MsC here at the University of Kent, [Nicolas Polomack](https://polomack.eu/) wrote the ([som-rs interpreters](https://github.com/hirevo/som-rs)), one being AST-based and the other BC-based, and he honestly did a tremendous job. However, the focus wasn’t so much on performance, and there’s a lot of effort needed to push it further. How much exactly? Well, here’s how much I improved the performance of the AST and BC interpreters after a few months of implementing various optimizations and fixing performance bugs:
+So I’m trying, with Rust specifically, to get interpreters to perform as well as our existing ones - maybe better??? As part of his MsC here at the University of Kent, [Nicolas Polomack](https://polomack.eu/) wrote the [som-rs interpreters](https://github.com/hirevo/som-rs), one being AST-based and the other BC-based, and he honestly did a tremendous job. However, the focus wasn’t so much on performance, and there’s a lot of effort needed to push it further. How much exactly? Well, here’s how much I improved the performance of the AST and BC interpreters after a few months of implementing various optimizations and fixing performance bugs:
 
 ![speedup compared to base project](/assets/2024-05-29-to-do-inlining/speedup_compared_to_main_repo.png)
 
@@ -65,7 +65,7 @@ That’s a cool feature, but 99.999999% of the time we want loops to be regular 
 
 Once again, the details don’t matter here. The big idea is that we jump past the body block when we’re done, and we jump to the condition block after we execute the body block. It’s pretty classic stuff, was surprisingly time-consuming to implement, but provided an unsurprisingly large amount of performance. Make every loop faster, and you speed up every program by a lot.
 
-### the to:do: method
+### the `to:do:` method
 
 But currently, we don’t handle every loop that way: a common way of looping is to call the `Integer>>#to:do:` method, invoked like `1 to: 50 do: [ ... ]` . In case anyone’s curious, here’s its code (no need to look at it that closely):
 
@@ -111,9 +111,9 @@ fn to_do(interpreter: &mut Interpreter, _: &mut Universe) {
 
 Then from 1 to 50 (using Rust’s nice `..=` inclusive range syntax), we’ll execute the body block somehow. Then every method returns its caller (`self`) when there’s no explicit return, which in this case is `start` (remember this is a method defined ON an integer class, which means `self` is an Integer with a value of 1!), so we put `start` back on the stack.
 
-Neat. It’s missing a critical part though: how do we execute the block?
+Neat. It’s missing a critical part though...
 
-### it's harder than it seems, isn't it
+### how do we execute that block?
 
 The bytecode loop for som-rs is a big `run` method invoked once at the start of the program and which continues until execution ends. There’s a call stack of method/block frames that gets added onto throughout execution depending on what calls are made, and getting the current bytecode is just a matter of accessing the current frame (the last on the frames stack) and reading the bytecode from it that corresponds to the current bytecode index.
 
@@ -211,22 +211,20 @@ We could do even better: generating the block at compile-time instead of parse-t
 
 ```rust
 if ["to:do:", "to:by:do:", "downTo:do:", "downTo:by:do:", "timesRepeat:"].iter().any(|s| *s == message.signature) {
-		match ctxt.get_instructions().last().unwrap() {
-		    Bytecode::PushBlock(idx) => {
-				   // find block from index "idx"
-				   // call our new `make_equivalent_with_no_return()`;
-					 // replace the block
-		    },
-		    _ => { todo!("uh... what's this case?") }
-		}
+    match ctxt.get_instructions().last().unwrap() {
+        Bytecode::PushBlock(idx) => {
+            // find block from index "idx"
+            // call our new `make_equivalent_with_no_return()`;
+            // replace the block
+        },
+        _ => { todo!("uh... what's this case?") }
+    }
 }
 ```
 
 …except it’s not that simple, and this `todo!("...")` case highlights why. If the block is the result of a `PushArgument` or `PushLocal` or whatnot, we can only get access to it during the runtime. So this sadly isn’t an easily available option, which is a shame since it would net us up a median speedup of 8% or so. [^better-block-solution]
 
-So we keep our previous solution of creating modified blocks at runtime.
-
-OK, final results:
+So we keep our previous solution of creating modified blocks at runtime. OK, final results:
 
 ![final results](/assets/2024-05-29-to-do-inlining/final_results.png)
 
@@ -236,7 +234,7 @@ Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and
 ## so what have we learned?
 
 - being mindful of the design of the interpreter itself matters, unsurprisingly. Choosing to have a single execution of a massive bytecode loop function, as opposed to designing the interpreter such that the bytecode loop function is invoked for each method call, makes things _much_ harder in this context.
-    - PL implementation hotshots reading this might roll their eyes at the decision of having a single function execution for the bytecode loop, even: it’s hard for me to tell since I’m lacking experience. Let me know more reasons why that’s a bad idea!
+    - It doesn't sound like a bad design decision to me, but is it? It’s hard for me to tell since I’m lacking experience. Let me know more about why that’s a bad idea if you know!
     - If not enough people point out to me that it is in fact a bad idea, I’d be interested to rebuild the bytecode interpreter to fix that design decision, and see if it’s faster. But I’d need to push the performance a lot more first.
 - There’s a lot of performance to be gained from optimizing loop operations. It’s fairly obvious, but a solid chunk of the runtime will be spent in long-running loops: if you can make them all a bit smoother, you make runtime a lot faster.
 - Aaaand the quick and easy solution is rarely quick or easy. This was never meant to be so arduous - this whole “let’s make a primitive function” idea was meant to take an hour tops to avoid spending a couple hours implementing it at the bytecode level, but it ended up taking much longer! I don’t think I could have easily predicted this seemingly easy change would be so hard: this requires a lot of knowledge about the system you’re working with and about interpreter design, yet I’m but a humble PhD student. We’re getting there though.
@@ -249,4 +247,4 @@ That’s it. More in the future. xoxo
 
 [^stockholm-syndrome]: [https://en.wikipedia.org/wiki/Stockholm_syndrome](https://en.wikipedia.org/wiki/Stockholm_syndrome)
 
-[^better-block-solution]: We *could* still instrument the blocks in the `PushBlock` case at compile-time and only instrument at runtime when we know it wasn’t instrumented at compile-time, but we’d need a way to differentiate instrumented from non-instrumented blocks. I’m thinking the best solution would be for primitives to check whether the last bytecode executed was a `PushBlock`, but our solution and this article are wordy enough as is…
+[^better-block-solution]: This problem is far from unfixable. We *could* still instrument the blocks in the `PushBlock` case at compile-time and only instrument at runtime when we know it wasn’t instrumented at compile-time, but we’d need a way to differentiate instrumented from non-instrumented blocks. I’m thinking one good solution would be for primitives to check whether the last bytecode executed was a `PushBlock`, but our solution and this article are wordy enough as is…

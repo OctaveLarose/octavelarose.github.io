@@ -1,10 +1,10 @@
-# title: Octave Larose
-# author:
-#   name: Octave Larose
-#   email: octave.larose@hotmail.com
+title: Octave Larose
+author:
+  # name: Octave Larose
+  email: octave.larose@hotmail.com
 
-# description: >
-#   Personal website of Octave Larose.
+description: >
+  My own personal website, with my own personal views and random thoughts.
 
 header_pages:
   - about.md
