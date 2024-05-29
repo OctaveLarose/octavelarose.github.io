@@ -9,7 +9,7 @@ This is part of a series of blog posts relating my experience pushing the perfor
 
 ## what? also, who?
 
-My PhD is on the runtime performance of AST interpreters: my job is to try to make things go fast. Last year, we published the paper “[AST vs Bytecode: Interpreters in the Age of Meta-Compilation](https://stefan-marr.de/downloads/oopsla23-larose-et-al-ast-vs-bytecode-interpreters-in-the-age-of-meta-compilation.pdf)"), where we compared AST and bytecode interpreters written on top of two different meta-compilation systems: GraalVM (a partial evaluation approach, relying on the Java language) and RPython (meta-tracing approach, in RPython, a Python subset). We concluded that AST interpreters performed surprisingly well, despite the widespread opinion that bytecode is the superior approach to interpreter design.
+My PhD is on the runtime performance of AST interpreters: my job is to try to make things go fast. Last year, we published the paper “[AST vs Bytecode: Interpreters in the Age of Meta-Compilation](https://stefan-marr.de/downloads/oopsla23-larose-et-al-ast-vs-bytecode-interpreters-in-the-age-of-meta-compilation.pdf)", where we compared AST and bytecode interpreters written on top of two different meta-compilation systems: GraalVM (a partial evaluation approach, relying on the Java language) and RPython (meta-tracing approach, in RPython, a Python subset). We concluded that AST interpreters performed surprisingly well, despite the widespread opinion that bytecode is the superior approach to interpreter design.
 
 Though one question we received a lot was: are AST interpreters only good on meta-compilation systems that rely on higher-level languages, and not REAL PROGRAMMING LANGUAGES like C or Rust where I can do all my fancy optimizations?
 
@@ -228,7 +228,7 @@ So we keep our previous solution of creating modified blocks at runtime. OK, fin
 
 ![final results](/assets/2024-05-29-to-do-inlining/final_results.png)
 
-Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and I’m not sure why - ([maybe it’s just noise](https://stefan-marr.de/2020/07/is-this-noise-or-does-this-mean-something-benchmarking/)).
+Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and I’m not sure why - [maybe it’s just noise](https://stefan-marr.de/2020/07/is-this-noise-or-does-this-mean-something-benchmarking/).
 
 
 ## so what have we learned?
@@ -241,6 +241,9 @@ Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and
 
 That’s it. More in the future. xoxo
 
+---
+
+Thanks to [Stefan Marr](https://stefan-marr.de/) (my PhD supervisor) for the feedback and the help.
 
 ---
 
