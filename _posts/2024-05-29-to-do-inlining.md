@@ -17,7 +17,7 @@ So I’m trying, with Rust specifically, to get interpreters to perform as well 
 
 ![speedup compared to base project](/assets/2024-05-29-to-do-inlining/speedup_compared_to_main_repo.png)
 
-A bit more than a 2x speedup or so on both, not bad. Small disclaimer: only showing results on our micro benchmarks for my own convenience, but results are extremely similar on our macro benchmarks.
+How to read the graph: each grey dot is one of our benchmarks, and lower is better. A 0.5x median speedup means we're twice as fast, as we can see here, so not bad. (small disclaimer: only showing results on our micro benchmarks for my own convenience, but results are extremely similar on our macro benchmarks).
 
 And this is where we’re currently at, compared to the interpreters we used in our paper:
 
@@ -47,7 +47,9 @@ whileTrue: block = (
 
 I won’t describe this code in detail. What matters is that in SOM, a loop is a method call, and that method calls need dispatching and are therefore not the fastest. It may sound like a counter-intuitive language design choice, but that’s the beauty of Smalltalk: you can re-implement every method yourself and fundamentally change the behavior of your system, like by making every loop invest in random cryptocurrencies to spice up both your VM _and_ your life (please don’t do this).
 
-That’s a cool feature, but 99.999999% of the time we want loops to be regular loops, so we should hard-code somehow to be treated as such. This is typically the kind of stuff you can _lower_ (handle at e.g. the bytecode-level or in the interpreter directly: anything to not interpret the code normally) to get better performance, and in fact we already do for `whileTrue:` (in the bytecode interpreter). I implemented some `JUMP` bytecodes, I inline the condition and body blocks into the method scope, and jump around to their starts and ends depending on what I want. Looks something like this:
+### can we speed that up?
+
+That’s a cool feature, but 99.999999% of the time we want loops to be regular loops, so we should hard-code somehow to be treated as such to gain performance. This is typically the kind of stuff you can _lower_ (handle at e.g. the bytecode-level or in the interpreter directly: anything to not interpret the code normally) to get better performance, and in fact we already do for `whileTrue:` (in the bytecode interpreter). I implemented some `JUMP` bytecodes, I inline the condition and body blocks into the method scope, and jump around to their starts and ends depending on what I want. Looks something like this:
 
 ```jsx
 0 | PUSH_LOCAL 0, 0
@@ -62,6 +64,8 @@ That’s a cool feature, but 99.999999% of the time we want loops to be regular 
 ```
 
 Once again, the details don’t matter here. The big idea is that we jump past the body block when we’re done, and we jump to the condition block after we execute the body block. It’s pretty classic stuff, was surprisingly time-consuming to implement, but provided an unsurprisingly large amount of performance. Make every loop faster, and you speed up every program by a lot.
+
+### the to:do: method
 
 But currently, we don’t handle every loop that way: a common way of looping is to call the `Integer>>#to:do:` method, invoked like `1 to: 50 do: [ ... ]` . In case anyone’s curious, here’s its code (no need to look at it that closely):
 
@@ -109,6 +113,8 @@ Then from 1 to 50 (using Rust’s nice `..=` inclusive range syntax), we’ll ex
 
 Neat. It’s missing a critical part though: how do we execute the block?
 
+### it's harder than it seems, isn't it
+
 The bytecode loop for som-rs is a big `run` method invoked once at the start of the program and which continues until execution ends. There’s a call stack of method/block frames that gets added onto throughout execution depending on what calls are made, and getting the current bytecode is just a matter of accessing the current frame (the last on the frames stack) and reading the bytecode from it that corresponds to the current bytecode index.
 
 If the bytecode says you need to return from a function, you pop from the frames stack and so the current frame switches back to the previous one. To call a new function/block, you push a new function/block frame and it becomes the current frame.
@@ -142,6 +148,8 @@ And that gives us a hint as to why it broke. Earlier I mentioned “every method
 
 So we need to call POP after each block. The issue is that with our current interpreter design, there’s no easy way to inform the interpreter to do that. TruffleSOM and PySOM don’t have a single big `run` bytecode loop, and in fact call the bytecode loop function for each method individually, so it’s pretty easy to say “invoke this method and then discard its results” - just call `run_bytecode_loop(method)`. No such luxury here.
 
+### selling my soul for performance
+
 OK, here’s a fix: add an `am_i_ugly` flag to every frame, set it to `true` only for these specific `to:do:` frames, and whenever we pop a frame (i.e. we return from a block/function) if the frame had that flag, we pop a value off the stack to ignore its output. And that works pretty damn well: look at that speedup!
 
 ![after ugly changes](/assets/2024-05-29-to-do-inlining/ugly_changes_1.png)
@@ -158,6 +166,8 @@ It’s a working solution though, so I went ahead and implemented the other vari
 Looks reaaal good. A 100% speedup on one of our benchmarks even (one whose runtime is extremely dominated by a `to:by:do:` call)! The code sucks, but we’re at least on the right track.
 
 So we’re back to the drawing board when it comes to informing the interpreter to clean up after some blocks. I guess we could also store some sort of state in the interpreter instead of in each frame, which would likely be faster and wouldn’t prevent compiler optimizations, but it’d be a pretty unclean solution and not as straightforward as one might think (we can’t just tell it: “do a POP after the next 50 frames”, because those `to:do:` frames may invoke nested blocks of their own, so it still needs to track info on a frame-by-frame basis).
+
+### a better solution
 
 I’ve got a better idea: instead of executing the block as is, we execute a _modified_ version of the block that cleans up after itself.
 
@@ -188,7 +198,7 @@ Way more annoyingly, there is such a thing as a `RETURN_NON_LOCAL` in our byteco
 
 This was confusing, hard to discover and understand, needed amending the goddamn bytecode set itself, and cost me many hours of my life that I’m never getting back :(
 
-So the `to:do` code is now:
+So the `to:do:` code is now:
 
 ```rust
 let new_block_rc = blk.make_equivalent_with_no_return();
