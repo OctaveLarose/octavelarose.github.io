@@ -1,1 +1,12 @@
+title: Octave Laroe
+author:
+  name: Octave Larose
+  email: octave.larose@hotmail.com
+
+description: >
+  Personal website of Octave Larose.
+
+header_pages:
+  - about.md
+
 theme: jekyll-theme-minima
