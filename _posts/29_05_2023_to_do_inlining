@@ -5,15 +5,15 @@ author:
 - Octave Larose
 ---
 
-This is part of a series of blog posts relating my experience pushing the performance of programming language interpreters written in Rust.
+This is part of a series of blog posts relating my experience pushing the performance of programming language interpreters written in Rust. This one is about inlining and primitives.
 
-## what? also, who?
+## “what? also, who?”
 
-My PhD is on the runtime performance of AST interpreters: my job is to try to make things go fast. Last year, we published the paper “[AST vs Bytecode: Interpreters in the Age of Meta-Compilation](https://stefan-marr.de/downloads/oopsla23-larose-et-al-ast-vs-bytecode-interpreters-in-the-age-of-meta-compilation.pdf)"), where we compared AST and bytecode interpreters written on top of two different meta-compilation systems: GraalVM (a partial evaluation approach, relying on the Java language) and RPython (meta-tracing approach, in RPython, a Python subset). We concluded that AST interpreters performed surprisingly well, despite the widespread opinion that bytecode is the superior approach to interpreter design.
+My PhD is on the runtime performance of AST interpreters: my job is to try to make things go fast. Last year, we published the paper “AST vs Bytecode: Interpreters in the Age of Meta-Compilation” [^ast-vs-bc-paper], where we compared AST and bytecode interpreters written on top of two different meta-compilation systems: GraalVM (a partial evaluation approach, relying on the Java language) and RPython (meta-tracing approach, in RPython, a Python subset). We concluded that AST interpreters performed surprisingly well, despite the widespread opinion that bytecode is the superior approach to interpreter design.
 
 Though one question we received a lot was: are AST interpreters only good on meta-compilation systems that rely on higher-level languages, and not REAL PROGRAMMING LANGUAGES like C or Rust where I can do all my fancy optimizations?
 
-So I’m trying, with Rust specifically, to get interpreters to perform as well as our existing ones - maybe better??? As part of his MsC here at the University of Kent, [Nicolas Polomack](https://polomack.eu/) wrote the ([som-rs interpreters](https://github.com/hirevo/som-rs)), one being AST-based and the other BC-based, and he honestly did a tremendous job. However, the focus wasn’t so much on performance, and there’s a lot of effort needed to push it further. How much exactly? Well, here’s how much I improved the performance of the AST and BC interpreters after a few months of implementing various optimizations and fixing performance bugs:
+So I’m trying, with Rust specifically, to get interpreters to perform as well as our existing ones - maybe better??? As part of his MsC here at the University of Kent, Nicolas Polomack ([https://polomack.eu/](https://polomack.eu/)) wrote the som-rs interpreters ([https://github.com/hirevo/som-rs](https://github.com/hirevo/som-rs)), one being AST-based and the other BC-based, and he honestly did a tremendous job. However, the focus wasn’t so much on performance, and there’s a lot of effort needed to push it further. How much exactly? Well, here’s how much I improved the performance of the AST and BC interpreters after a few months of implementing various optimizations and fixing performance bugs:
 
 ![Untitled](https://prod-files-secure.s3.us-west-2.amazonaws.com/51ca50d6-c032-4d50-bcf8-d5dfea2d3747/e028cba8-a81d-400a-85a5-7d66d2f711c8/Untitled.png)
 
@@ -29,7 +29,7 @@ As a disclaimer, I’m not a _real_ Rust dev, and I’m in fact a disgusting pos
 
 I have been loving my time as a Rust dev, though! It’s a great language and really pleasant to work with. At other times unpleasant to work with when you want to get high performance and ownership rules get in your way... More on that at some point.
 
-## what happened this week?
+## this week (well really it was several weeks, urgh)
 
 We’re working with interpreters for the SOM language, a minimal Smalltalk designed for research and teaching. It being based on Smalltalk means that everything under the sun is an object, and so that method calls on said objects are absolutely everywhere. Say your code has a loop:
 
@@ -79,9 +79,9 @@ to: limit by: step do: block = (
 
 `to:do:` is essentially a `for` loop and is consequently used very frequently, but it _doesn’t_ get turned to specialized bytecode right now because I’ve only got so much time. Let’s finally speed it up!
 
-Now, inlining calls and blocks at the bytecode level is nice, but another way of lowering code is to implement some function as a _primitive_: i.e. handling it as its own special case in the interpreter. Primitives are everywhere and unavoidable in PL implementation: just ask yourself how you would allow a program to perform a system call like `time` , and you’ll find making a primitive for it is a very sensible solution.
+Now, inlining calls and blocks at the bytecode level is nice, but another way of lowering code is to implement some function as a _primitive_: i.e. handling it as its own special case in the interpreter. Primitives are everywhere and unavoidable in PL implementation: just ask yourself how you would allow a program to perform a system call like `time` , and you’ll find making a primitive for it is a very sensible solution [footnote: a more general solution would be an FFI].
 
-In this case, I’m confident that specialized bytecode would be faster, but I figured a primitive would be a quick and easy solution so I could move on to trying to squeeze (hopefully major) performance wins elsewhere. Especially since there’s `Integer>>#to:do:` but also `Integer>>#to:by:do:` and `Integer>>#downTo:do:` and `Integer>>#downTo:by:do:` and they all have different behaviors and I am lazy. I’d rather make them primitives with nearly identical code than wrap my head around how bytecode should be generated for each - we want an easy, in and out, 20 minute adventure (spoilers: I have forgotten [Hofstadter's law](https://en.wikipedia.org/wiki/Hofstadter%27s_law) yet again)
+In this case, I’m confident that specialized bytecode would be faster, but I figured a primitive would be a quick and easy solution so I could move on to trying to squeeze (hopefully major) performance wins elsewhere. Especially since there’s `Integer>>#to:do:` but also `Integer>>#to:by:do:` and `Integer>>#downTo:do:` and `Integer>>#downTo:by:do:` and they all have different behaviors and I am lazy. I’d rather make them primitives with nearly identical code than wrap my head around how bytecode should be generated for each - we want an easy, in and out, 20 minute adventure (spoilers: I have forgotten Hofstadter's law yet again [footnote to quote])
 
 So here’s our `to:do:` primitive:
 
@@ -212,7 +212,7 @@ if ["to:do:", "to:by:do:", "downTo:do:", "downTo:by:do:", "timesRepeat:"].iter()
 }
 ```
 
-…except it’s not that simple, and this `todo!("...")` case highlights why. If the block is the result of a `PushArgument` or `PushLocal` or whatnot, we can only get access to it during the runtime. So this sadly isn’t an easily available option, which is a shame since it would net us up a median speedup of 8% or so. [^better-block-solution]
+…except it’s not that simple, and this `todo!("...")` case highlights why. If the block is the result of a `PushArgument` or `PushLocal` or whatnot, we can only get access to it during the runtime. So this sadly isn’t an easily available option, which is a shame since it would net us up a median speedup of 8% or so. [Footnote: We _could_ still instrument the blocks in the `PushBlock` case at compile-time and only instrument at runtime when we know it wasn’t instrumented at compile-time, but we’d need a way to differentiate instrumented from non-instrumented blocks. I’m thinking the best solution would be for primitives to check whether the last bytecode executed was a `PushBlock`, but our solution and this article are wordy enough as is…]
 
 So we keep our previous solution of creating modified blocks at runtime.
 
@@ -222,9 +222,7 @@ OK, final results:
 
 Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and I’m not sure why - maybe it’s just noise ([https://stefan-marr.de/2020/07/is-this-noise-or-does-this-mean-something-benchmarking/](https://stefan-marr.de/2020/07/is-this-noise-or-does-this-mean-something-benchmarking/)).
 
-
 ---
-
 
 So what have we learned?
 
@@ -236,6 +234,5 @@ So what have we learned?
 
 That’s it. More in the future. xoxo
 
-[^stockholm-syndrome]: [https://en.wikipedia.org/wiki/Stockholm_syndrome](https://en.wikipedia.org/wiki/Stockholm_syndrome)
-
-[^better-block-solution]: We *could* still instrument the blocks in the `PushBlock` case at compile-time and only instrument at runtime when we know it wasn’t instrumented at compile-time, but we’d need a way to differentiate instrumented from non-instrumented blocks. I’m thinking the best solution would be for primitives to check whether the last bytecode executed was a `PushBlock`, but our solution and this article are wordy enough as is…
+[^ast-vs-bc-paper]: https://stefan-marr.de/downloads/oopsla23-larose-et-al-ast-vs-bytecode-interpreters-in-the-age-of-meta-compilation.pdf](https://stefan-marr.de/downloads/oopsla23-larose-et-al-ast-vs-bytecode-interpreters-in-the-age-of-meta-compilation.pdf
+[^stockholm-syndrome]: https://en.wikipedia.org/wiki/Stockholm_syndrome
