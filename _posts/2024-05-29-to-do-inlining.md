@@ -239,14 +239,9 @@ Massive speedups! It’s a very minor slowdown on one of our microbenchmarks and
 - There’s a lot of performance to be gained from optimizing loop operations. It’s fairly obvious, but a solid chunk of the runtime will be spent in long-running loops: if you can make them all a bit smoother, you make runtime a lot faster.
 - Aaaand the quick and easy solution is rarely quick or easy. This was never meant to be so arduous - this whole “let’s make a primitive function” idea was meant to take an hour tops to avoid spending a couple hours implementing it at the bytecode level, but it ended up taking much longer! I don’t think I could have easily predicted this seemingly easy change would be so hard: this requires a lot of knowledge about the system you’re working with and about interpreter design, yet I’m but a humble PhD student. We’re getting there though.
 
-That’s it. More in the future. xoxo
+That's about it. Thanks to [Stefan Marr](https://stefan-marr.de/) (my PhD supervisor) for the feedback and the help. I'll post more stuff in the future. xoxo
 
 ---
-
-Thanks to [Stefan Marr](https://stefan-marr.de/) (my PhD supervisor) for the feedback and the help.
-
----
-
 
 [^stockholm-syndrome]: [https://en.wikipedia.org/wiki/Stockholm_syndrome](https://en.wikipedia.org/wiki/Stockholm_syndrome)
 
