@@ -9,9 +9,9 @@ This is part of a series of blog posts relating my experience pushing the perfor
 
 If you don't want to do that, in short: we optimize AST+BC Rust-written implementations of a Smalltalk-based research language called [SOM](http://som-st.github.io/), in hopes of getting them fast enough to meaningfully compare them with other SOM implementations.
 
-As a general rule, all my changes to the original interpreter (that led to speedups + don't need cleaning up) are present [here](https://github.com/OctaveLarose/som-rs/tree/best). This week's code is [in its own branch](https://github.com/OctaveLarose/som-rs/tree/ast-interp-inline-caching), since it relies on ugly code (explanations further below). TODO: specific commit
+As a general rule, all my changes to the original interpreter (that led to speedups + don't need cleaning up) are present [here](https://github.com/OctaveLarose/som-rs/tree/best). This week's code is [in its own branch](https://github.com/OctaveLarose/som-rs/tree/f9ba61bcc740cafd32b0b1be517a71ecfd9b3bbb), since it relies on ugly code so I don't want it on the main branch (explanations further below).
 
-...and benchmark results are obtained using Rebench, then I get cool numbers and graphs using RebenchDB. In fact, you can check out RebenchDB and all of my results for yourself [here](https://rebench.stefan-marr.de/som-rs/), where you can admire A) RebenchDB being very useful, well made software and B) the stupid names I give my git commits to amuse myself.
+...and benchmark results are obtained using Rebench, then I get cool numbers and graphs using RebenchDB. In fact, you can check out RebenchDB and all of my results for yourself [here](https://rebench.stefan-marr.de/som-rs/), where you can also admire the stupid names I give my git commits to amuse myself.
 
 ### inline caching?
 
@@ -20,30 +20,30 @@ Inline caching is a very widespread optimization in dynamic programming language
 Say you have this code:
 
 ```
-benchmarkClass := loadBenchmarkClass: "BubbleSort".
-benchmarkClass runBenchmark.
+someClass := getSomeClassSomehow.
+someClass doSomething.
 ```
 
-Since we're working with a dynamic language, `benchmarkClass` can be any class at all: it can be `True`, it can be `Integer`, it can be `Whatever`, etc. Whenever you've got a method call (a.k.a a "message": sending the receiver a message "please execute your method of the given name"), you can't make any assumptions at compile-time about what class the method is going to get invoked on.
+Since we're working with a dynamic language, `someClass` can be any class at all: it can be `True`, it can be `Integer`, it can be `Whatever`, etc. Whenever you've got a `doSomething` method call (a.k.a a "message": sending the receiver the message "please execute your `doSomething` method") like this, you can't make any assumptions at compile-time about what class the method is going to get invoked on, therefore what version of `doSomething` you should use. You only find that out when it's actually executed.
 
-This is annoying since that means that at every method call site, once you find out what the class is, you need to look up the method in that class to be able to then execute it. That takes a bit of time for every single call, and basically everything under the sun is a call in SOM, so that's slow.
+This is annoying since that means that at every method call site, once you know what the class is, you need to look up the method in that class to be able to then execute it. That takes a bit of time for every single call, and basically everything under the sun is a call in SOM, so that's kinda slow.
 
 So why not cache the result of those lookups, so that they don't have to be done every single time? That'd make it so that whenever we call anything, we check the receiver we cached and we invoke it on that instead.
 
 What if the receiver changes?
-- then we make it so that our cache has several entries, and cache all possible receivers.
+- then we make it so that our cache has several entries, and cache all possible receivers, so that we account for both the old and new receivers.
 
 What if there's so many receivers that caching is impractically expensive?
-- this is not an issue in practice! As it turns out, a method call is rarely invoked with that many different classes: most calls are *monomorphic*, a fancy term for saying "only one possible caller".[TODO put sophie's paper there maybe?].
-  - We wrote a paper in 2022 on the behavior of Ruby codebases, [which you can read here](https://stefan-marr.de/downloads/dls22-kaleba-et-al-analyzing-the-run-time-call-site-behavior-of-ruby-applications.pdf), in which we observed about 98% of the call-sites in large benchmarks to be monomorphic. Granted this is for the Ruby language and not SOM, but they're both highly dynamic enough to be comparable.
+- this is not so much of an issue in practice! As it turns out, a method call is rarely invoked with that many different classes: most calls are *monomorphic*, a fancy term for saying "only one possible caller"..
+  - We wrote a paper in 2022 on the behavior of Ruby codebases, [which you can read here](https://stefan-marr.de/downloads/dls22-kaleba-et-al-analyzing-the-run-time-call-site-behavior-of-ruby-applications.pdf), in which we observed about 98% of the call-sites in large benchmarks to be monomorphic. Granted this is for the Ruby language and not SOM, but they're both highly dynamic so we argue they're comparable.
 
-- most implementations add a `am_i_megamorphic` (*megamorphic* as in a lot of possible callers) check to callsites, and if we've observed too many receivers in the past, we stop caching and looking up entries entirely, only doing a generic lookup.
+- most language implementations add a `am_i_megamorphic` (*megamorphic* as in a impractically large amount of possible callers) flag to callsites: if we've observed way too many receivers in the past, we stop caching and looking up entries entirely, only doing a generic lookup from now on.
 
 Cool. And those caches may as well be stored at the call sites themselves, therefore be *inline*, hence the name.
 
 ### inline caching in our bytecode interpreter
 
-Inline caching is already implemented in the bytecode interpreter, and looks like this:
+We've already implemented in the bytecode interpreter, and looks like this:
 
 ```rust
 fn resolve_method(frame: &SOMRef<Frame>, class: &SOMRef<Class>, signature: Interned, bytecode_idx: usize) -> Option<Rc<Method>> {
@@ -57,9 +57,7 @@ fn resolve_method(frame: &SOMRef<Frame>, class: &SOMRef<Class>, signature: Inter
         }
         place @ None => {
             let found = class.borrow().lookup_method(signature);
-            *place = found
-                .clone()
-                .map(|method| (class.as_ptr() as *const _, method));
+            *place = found.clone().map(|method| (class.as_ptr() as *const _, method));
             found
         }
         _ => class.borrow().lookup_method(signature),
@@ -69,12 +67,12 @@ fn resolve_method(frame: &SOMRef<Frame>, class: &SOMRef<Class>, signature: Inter
 
 Every bytecode has its own associated inline cache. It's empty most of the time - you don't need to cache anything for a `POP` bytecode - but will get entries for `SEND` bytecodes. Whenever you resolve a method, you check whether the inline cache has an entry for this bytecode, and what the cached receiver and methods are: if the cached receiver is the same as the current receiver, then we can just call the method. Otherwise, we do a lookup and put the method in the cache.
 
-Note that this is an inline cache of size one. That's because [adding more entries was not that beneficial to performance, with our benchmarks](https://github.com/Hirevo/som-rs/pull/31). We'll try varying the number of entries in the AST implementation, and see if it's the same as in the BC.
+Note that this is an inline cache of size one. That's because [adding more entries was not that beneficial to performance on our benchmarks](https://github.com/Hirevo/som-rs/pull/31). We'll try varying the number of entries in the AST implementation, and see if it's the same as in the BC.
 
 Rust side note: this is also a good example of us using pointers + `unsafe` to sneak in some performance:
 1. `*frame.borrow_mut().inline_cache`: inline caches are stored in `Method` structs directly. Frames keep a pointer to them for fast access, and dereferencing a pointer is unsafe.
 We could theoretically use `&` (i.e. a standard Rust reference) instead, but those come with the burden of informing the compiler about lifetimes, which is far from straightforward in this case; we the (very) smart (and cool) programmers know that a method and its inline cache will definitely outlive any frame that relies on them.
-2. `inline_cache.get_unchecked_mut(bytecode_idx)`: we know there's as many inline cache entries as there are bytecodes, so we may as well avoid the safety check a regular `get()` call would induce.
+1. `inline_cache.get_unchecked_mut(bytecode_idx)`: we know there's as many inline cache entries as there are bytecodes, so we may as well avoid the safety check a regular `get()` call would induce.
 
 ### rust hates AST interpreters
 
@@ -101,7 +99,7 @@ No more Rust compiler guarantees though, and that's kind of Rust's whole thing, 
 
 Making the interpreter unsafe is a mild speedup:
 
-![unsafe-interp](unsafe-interp.png)
+![unsafe-interp](/assets/inline-caching/unsafe-interp.png)
 
 ...very likely from avoiding safety checks and no longer having to increase reference counters. This makes me think that even if I stop using this horribly unsafe AST interpreter, there's potential for some mindful usage of `unsafe` to get little speedups like this.
 
@@ -136,37 +134,61 @@ If anyone knows how this is achievable, I'd love to know. Is there a way to use 
 
 ### rust-friendly working version
 
-Self-replacement is a no-go, so we're no longer replacing the Message itself. Instead, a `Message` is now bundled with its cache in a big old `MessageCall` :
+Self-replacement is a no-go, so we're no longer replacing the `Message` itself. Instead, a `Message` is now bundled with its cache in a big ol' `MessageCall` :
 
 ```rust
 #[derive(Debug, Clone, PartialEq)]
 pub struct MessageCall {
     pub message: Message,
-    pub inline_cache: Option<(usize, usize)>
+    pub inline_cache: Option<CacheEntry>
 }
 ```
 
-[TODO describe behavior here]
+`CacheEntry` is just a pointer to a receiver + a pointer to a method. `Option<...>` is the default Rust option type, meaning "either something or nothing at all"
 
-![alt text](one-entry.png)
+Before looking up a method, we check whether there's an entry in the inline cache, and whether it matches that method. If it does, great! We invoke it from the pointer to it that we stored. Otherwise, we look up the method the boring and slow way, and we then store that lookup result in the cache if it's empty.
 
-Neat!
+![alt text](/assets/inline-caching/one-entry.png)
 
-We've got one outlier here: `NBody`.
+Neat! Mild speedups!
 
-Two entries (`(Option<(usize, usize)>, Option<(usize, usize)>`): well, NBody likes it more! The rest feels lukewarm about it. Probably because most calls are monomorphic
+Though we do have got one outlier in the form of this grey little dot: `NBody`. I've no idea why. In my experience, adding to basic data structures in the interpreter like this can prevent some compiler optimizations on some benchmarks. `CacheEntry` is the size of two pointers - one for the class, one for the method. A `Box<CacheEntry>` (Rust heap pointer type) is only the size of one pointer. Let's use that type instead, because why not:
 
-Comparing two entries with one entry:
+![alt text](/assets/inline-caching/one-entry-boxed.png)
 
-![alt text](two-entries.png)
+No more outlier! Fixing this bug after not a minute of thinking makes me feel like I'm starting to master arcane arts. I'm going to need to grow a longer beard to become a proper senior developer (i.e. wizard) though[^beard].
 
+It doesn't show very well, but boxing is a very minor slowdown for basically all other benchmarks, though, since boxing actually needs to allocate some memory. Oh well.
 
-How about seven elements? `pub inline_cache: Box<[Option<CacheEntry>; 7]>` ?
+One entry is good, but several cache entries *should* be better:
 
-![alt text](seven-entries.png)
+```rust
+pub inline_cache: Box<[Option<CacheEntry>; INLINE_CACHE_SIZE]>
+```
 
-<!-- And we add a `is_megamorphic` flag to -->
+We'll start with an `INLINE_CACHE_SIZE` of 2.
 
+From now on, results are compared not with a baseline version of the interpreter without inline caching, but with the previous version of the interpreter with a different version of inline caching (and we use micro benchmarks instead: there's more of them, so more data points, so slightly more legible results). So in this case, we're comparing the older 1-entry-cache version with the newer 2-entries-cache version:
+
+![alt text](/assets/inline-caching/two-entries.png)
+
+...ok, that's a rough 1-2% speedup on the AST. Though those results aren't very conclusive: the BC interpreter itself is getting a mild speedup. Our BC interp does rely on the AST generated by the parser (which it just turns to bytecode and then discards), so maybe changing the type of the `inline_cache` allowed the Rust compiler to do some optimizations that made parsing slightly faster, somehow. Either way, not convinced the cache had a major impact.
+
+...but another inline cache entry will totally change things: comparing the 2-entry one with a new one with an `INLINE_CACHE_SIZE` of 3 giiives...
+
+![alt text](/assets/inline-caching/three-entries.png)
+
+...nothing really, just noise. Seven entries?
+
+![alt text](/assets/inline-caching/seven-entries.png)
+
+Slowdown. But I bet ONE THOUSAND entries will do the trick:
+
+![alt text](/assets/inline-caching/1k-entries.png)
+
+Darn. No one could have predicted allocating 1000 entries per callsite would be a slowdown. I think I should try with 2000 (just in case), but for now I think we're done.
+
+<!--
 ### linked lists
 
 ...are a bad idea in Rust, [say smart people](https://rust-unofficial.github.io/too-many-lists/index.html#an-obligatory-public-service-announcement). But I'm also occasionally smart[^smart]
@@ -188,20 +210,32 @@ pub struct MessageCall {
 }
 ```
 
-![alt text](linked-list.png)
+![alt text](/_drafts/linked-list.png)
 
 Only a minor speedup, interestingly.
-
-### final results
-
-OK OK here we are
-
-![alt text](final-results.png)
-
-All our tweaks really didn't improve much on the original, single entry inline cache. Results aren't insanely good, which is actually expected: when Nicolas implemented it for the bytecode interpreter, [we got similar numbers](https://github.com/Hirevo/som-rs/pull/13).
+-->
 
 
+### done and dusted
+
+OK, an inline cache of 2 is the final choice, then, I guess.
+
+![alt text](/assets/inline-caching/two-entries-base-compare.png)
+
+All our tweaks with caches of varying sizes really didn't improve much. Results also aren't insanely good, which is actually expected: when it was implemented it for the bytecode interpreter, [we got similar numbers](https://github.com/Hirevo/som-rs/pull/13). Speaking of the bytecode interp., our experiments today show that increasing the size of its cache by 1 might be beneficial, but I'm not doing that just for a potential 1-2% speedup.
+
+I originally had a section where I implemented inline caching as a linked list instead of an array. That felt like a more natural choice since that would make it a lazy cache: the length of the inline cache is X entries (each one a node) if it's received X receivers, which can be as small or big as it needs. But this wasn't a speedup, probably because our benchmarks never need big caches anyway.
+
+### what have we learned?
+- you might have learned how inline caching works? But I didn't learn anything since I already knew that. You've effectively ripped me off.
+- we've seen Rust doesn't like self-referential, self-modifying tree structures. Which is a pain for me, and advice (tell me on Twitter) is more than welcome.
+  - my understanding is that managing my own heap/arena of AST nodes may solve it.
+  - [Rc::new_cyclic](https://doc.rust-lang.org/stable/std/rc/struct.Rc.html#method.new_cyclic) might be helpful here as well? I'm not entirely sure.
+- shoutout to good benchmark running/visualizing software to allow me to do such a thorough comparison of various slightly different versions of my system!
+  - I know my supervisor designed Rebench and RebenchDB, but I swear I'm not getting paid to praise them (though I wish I were)
+
+thanks for reading, goodbye
 
 ---
 
-[^smart]: Roughly 13.6% of the time
+[^beard]: A colleague recently shaved his massive beard and I commented on it essentially truncating his computer science skills, which he admitted to himself. I hope his GNU/Linux knowledge reappears as it grows back
