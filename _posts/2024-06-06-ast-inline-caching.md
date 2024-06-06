@@ -9,7 +9,7 @@ This is part of a series of blog posts relating my experience pushing the perfor
 
 In short: we optimize AST (Abstract Syntax Tree) and BC (Bytecode) Rust-written implementations of a Smalltalk-based research language called [SOM](http://som-st.github.io/), in hopes of getting them fast enough to meaningfully compare them with other SOM implementations.
 
-As a general rule, all my changes to the original interpreter (that led to speedups + don't need cleaning up) are present [here](https://github.com/OctaveLarose/som-rs/tree/best). This week's code is [in its own branch](https://github.com/OctaveLarose/som-rs/tree/f9ba61bcc740cafd32b0b1be517a71ecfd9b3bbb), since it relies on ugly code so I don't want it on the main branch (explanations further below).
+As a general rule, all my changes to the original interpreter (that led to speedups + don't need code cleanups) are present [here](https://github.com/OctaveLarose/som-rs/tree/best). This week's code is [in its own branch](https://github.com/OctaveLarose/som-rs/tree/f9ba61bcc740cafd32b0b1be517a71ecfd9b3bbb), since it relies on ugly code so I don't want it on the main branch (explanations further below).
 
 ...and benchmark results are obtained using [Rebench](https://github.com/smarr/ReBench), then I get performance increase/decrease numbers and cool graphs using [RebenchDB](https://github.com/smarr/ReBenchDB). In fact, you can check out RebenchDB in action and all of my results for yourself [here](https://rebench.stefan-marr.de/som-rs/), where you can also admire the stupid names I give my git commits to amuse myself.
 
@@ -32,12 +32,12 @@ Obvious caveat: if the method call eventually has a different receiver class, th
 - ...or better: we make it so that our cache has several entries, and cache all possible receivers, so that we account for both the old and new receivers!
 
 What if there's so many receivers that caching is impractically expensive?
-- this is not so much of an issue in practice! As it turns out, a method call is rarely invoked with that many different classes: most calls are *monomorphic*, a fancy term for saying "only one possible caller"..
+- this is not so much of an issue in practice! As it turns out, a method call is rarely invoked with that many different classes: most calls are *monomorphic*, a fancy term for saying "only one caller met so far"..
   - We wrote a paper in 2022 on the behavior of Ruby codebases, [which you can read here](https://stefan-marr.de/downloads/dls22-kaleba-et-al-analyzing-the-run-time-call-site-behavior-of-ruby-applications.pdf), in which we observed about 98% of the call-sites in large benchmarks to be monomorphic. Granted this is for the Ruby language and not SOM, but since they're both highly dynamic and similar in terms of features (e.g. objects and inheritance, lambdas/closures, non-local returns), we argue they're comparable.
 
 - most inline caching implementations add a way to declare a callsite as *megamorphic* (fancy term for "an impractically large amount of possible callers"): if we've observed way too many receivers in the past, we stop caching and looking up entries entirely, only doing a generic lookup from now on.
 
-Cool. And those caches may as well be stored at the call sites themselves, therefore be *inline*, hence the name.
+Cool. And those caches may as well be stored at the call sites themselves, therefore be *inline*, hence the name (or so I've always assumed).
 
 ### inline caching in our bytecode interpreter
 
@@ -89,7 +89,7 @@ already mutably borrowed: BorrowError
 
 ...aaand that makes a lot of sense since Rust ownership is all about either having many immutable borrows or ONE mutable borrow. If whenever we call a method, we borrow it mutably, then a simple recursive call from inside that method will need to also mutably borrow the same method, and we're already toast - and that's one of several potential `BorrowError` we could see.
 
-Changing the design of the AST interpreter so that it can be self-modifying has been in my todo list since the start of this project. It's hard if just to wrap my head around how it would be best to go about it. So let's circumvent that for now: the current quick """fix""", is... using a lot of raw pointers instead of safe `Rc<RefCell<T>>` types, and peppering the code with a million uses of `unsafe`. Is this bad? Yeah! Does it work? Also yeah!
+Changing the design of the AST interpreter so that it can be self-modifying has been in my todo list since the start of this project. It's not just for inline caching: the ability to do runtime replacement of any node with a more optimized one would open many many doors, it's hard if just to wrap my head around how it would be best to go about it. So let's circumvent that for now: the current quick """fix""", is... using a lot of raw pointers instead of safe `Rc<RefCell<T>>` types, and peppering the code with a million uses of `unsafe`. Is this bad? Yeah! Does it work? Also yeah!
 
 No more Rust compiler guarantees though, and that's kind of Rust's whole thing, so we might as well be working with C at this point. Shame. This is absolutely something that I want to fix, and will fix in the future - and it should make for a decent blog post when I do.
 
@@ -105,7 +105,7 @@ As time goes on, I'm probably going to have to lean more and more on the `unsafe
 
 My expectation is that I shouldn't care at all, and that I'll never get to the point that most of the codebase uses `unsafe`. In the work of [Yi Lin et al. on high performance garbage collection](https://www.steveblackburn.org/pubs/papers/rust-ismm-2016.pdf), they found that few uses of `unsafe` were necessary to still get high performance. This is for garbage collection and not PL implementation like we're doing, but it's similar enough to make me believe that good software engineering can circumvent abusing ugly unsafe code.
 
-### rust semantics also hate self-optimizing nodes
+### rust semantics don't play well with self-optimizing nodes
 
 The way I wanted to implement inline caching mirrors how we do it in our other AST interpreters: replacing an unoptimized `NormalMessageNode` with a *specialized*, optimized `CachedMessageNode`. Something like this:
 
@@ -124,11 +124,15 @@ So to replace an uninitialized node, we'd do something like this:
 *self = ast::Message::Cached(method_def, class_identifier, self.message);
 ```
 
-Sounds good, right? We replace it and transfer ownership of the messag... wait this code doesn't work because I can't transfer ownership in Rust actually oops
+Sounds good, right? We replace it and transfer ownership of the messag... wait this code doesn't work because I can't transfer ownership in Rust actually oops can I
 
 Really, it should be allowed: I want to tell Rust to transfer ownership of the `GenericMessage` from the node to its new, optimized version. My understanding is that this fails because creating this new node and assigning it to `self` are two distinct operations: we create a new node that takes ownership of `self.message` and THEN make `self` that node, when really `self` keeps ownership of the message throughout the whole thing.
 
 If anyone knows how this is achievable, I'd love to know. Is there a way to use `std::mem::replace` somehow, or has someone made some crate that addresses this?
+
+EDIT: This is a case of me not being knowledgeable enough, I did get the answers I wanted there! `std::mem::take` solves my problem. The annoying thing (and why I'd originally disregarded it as a potential solution, which was my mistake) is that this means my `Message` has to implement the `Default` trait, since it replaces the taken value with a default - and the idea of making a default message sounded weird to me, so unlikely to be a good solution.
+
+So this implementation could work, as far as I understand. But I don't think it'd be particularly faster and the approach I follow below sounds more straightforward anyway. Still, that's very good to know about for the future.
 
 ### rust-friendly working version
 
@@ -142,7 +146,7 @@ pub struct MessageCall {
 }
 ```
 
-`CacheEntry` is just a pointer to a receiver + a pointer to a method. `Option<...>` is the default Rust option type, meaning "either something or nothing at all": there can be some cache, or there can be none.
+`CacheEntry` is just a pointer to a receiver + a pointer to a method (EDIT: both raw pointers, to be clear.). `Option<...>` is the default Rust option type, meaning "either something or nothing at all": there can be some cache, or there can be none.
 
 Before looking up a method, we check whether there's an entry in the inline cache, and whether it matches that method. If it does, great! We invoke it from the pointer to it that we stored. Otherwise, we look up the method the boring and slow way, and we then store that lookup result in the cache if it's empty.
 
@@ -226,14 +230,16 @@ I originally had a section where I implemented inline caching as a linked list i
 
 ### what have we learned?
 - you might have learned how inline caching works? But I didn't learn anything since I already knew that. You've effectively ripped me off.
-- monomorphic callsites everywhere! That might be unexpected to some, and makes inline caching not be as beneficial performance-wise as you'd think.
+- monomorphic callsites everywhere! That might be unexpected to some, and makes inline caching not be as beneficial performance-wise as you'd think in many cases.
 - we've seen Rust doesn't like self-referential, self-modifying tree structures. Which is a pain for me, and advice is more than welcome (tell me on [Twitter](https://twitter.com/OctaveLarose)).
-  - my understanding is that managing my own heap/arena of AST nodes may solve it?
-  - [Rc::new_cyclic](https://doc.rust-lang.org/stable/std/rc/struct.Rc.html#method.new_cyclic) might be helpful here as well? I'm not entirely sure.
+  - my understanding is that managing my own heap/arena of AST nodes may solve it? More on that in the future, since I believe it's what I'll have to implement
+  - [Rc::new_cyclic](https://doc.rust-lang.org/stable/std/rc/struct.Rc.html#method.new_cyclic) miiight be helpful here as well? I'm not entirely sure.
 - shoutout to good benchmark running/visualizing software to allow me to do such a thorough comparison of various slightly different versions of my system!
   - I know my supervisor designed Rebench and RebenchDB, but I swear I'm not getting paid to praise them (though I wish I were)
 
 thanks for reading, goodbye
+
+EDIT: minor edits and clarifications based on feedback
 
 ---
 
