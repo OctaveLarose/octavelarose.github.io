@@ -19,7 +19,7 @@ So I’m trying, with Rust specifically, to get interpreters to perform as well 
 
 How to read the graph: each grey dot is one of our benchmarks, and lower is better. A 0.5x median speedup means we're twice as fast, as we can see here, so not bad. (small disclaimer: only showing results on our micro benchmarks for my own convenience, but results are extremely similar on our macro benchmarks).
 
-And this is where we’re currently at, compared to the interpreters we used in our paper:
+And this is where we’re currently at, compared to the interpreters we used in our paper ([TruffleSOM](https://github.com/SOM-st/TruffleSOM/) and [PySOM](https://github.com/som-st/PySOM)):
 
 ![compare-all-interps](/assets/2024-05-29-to-do-inlining/comparing_every_interp.png)
 
@@ -146,7 +146,7 @@ This kind of error really just means “the stack got messed up and that caused 
 
 And that gives us a hint as to why it broke. Earlier I mentioned “every method returns its caller (`self`) when there’s no explicit return”: every single method or block returns something, which gets put on the stack. But in this case, we really don’t care about whatever the block returns, and the real `to:do:` pops it off the stack after each execution.
 
-So we need to call POP after each block. The issue is that with our current interpreter design, there’s no easy way to inform the interpreter to do that. TruffleSOM and PySOM don’t have a single big `run` bytecode loop, and in fact call the bytecode loop function for each method individually, so it’s pretty easy to say “invoke this method and then discard its results” - just call `run_bytecode_loop(method)`. No such luxury here.
+So we need to call POP after each block. The issue is that with our current interpreter design, there’s no easy way to inform the interpreter to do that. TruffleSOM and PySOM (our two best interpreters) don’t have a single big `run` bytecode loop, and in fact call the bytecode loop function for each method individually, so it’s pretty easy to say “invoke this method and then discard its results” - just call `run_bytecode_loop(method)`. No such luxury here.
 
 ### selling my soul for performance
 

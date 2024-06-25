@@ -72,11 +72,11 @@ Rust side note: this is also a good example of us using pointers + `unsafe` to s
 We could theoretically use `&` (i.e. a standard Rust reference) instead, but those come with the burden of informing the compiler about lifetimes, which is far from straightforward in this case; we the (very) smart programmers know that a method and its inline cache will definitely outlive any frame that relies on them.
 1. `inline_cache.get_unchecked_mut(bytecode_idx)`: we know there's as many inline cache entries as there are bytecodes, so we may as well avoid the safety check a regular `get()` call would induce.
 
-### rust hates AST interpreters
+### rust hates mutable trees (and sadly AST interpreters love them)
 
 Now we want to implement it in the AST. Unfortunately for us, this may be a case where the choice of the Rust language may not be the best.
 
-Our AST is currently immutable. It just so happens that [self-optimizing ASTs are key to good performance](https://dl.acm.org/doi/10.1145/2384577.2384587), so we've got an issue.
+Our AST is currently immutable. It just so happens that [self-optimizing ASTs are key to good performance](https://dl.acm.org/doi/10.1145/2384577.2384587), so we've got a major issue.
 
 To implement inline caching, we'd want to implement the cache _inline_ in the AST directly, so e.g. have a `MethodCallNode` that we modify to cache stuff directly in it. That requires said node to have a mutable state; and if you know anything about Rust, you can foresee how that could easily cause issues.
 
@@ -105,7 +105,7 @@ As time goes on, I'm probably going to have to lean more and more on the `unsafe
 
 My expectation is that I shouldn't care at all, and that I'll never get to the point that most of the codebase uses `unsafe`. In the work of [Yi Lin et al. on high performance garbage collection](https://www.steveblackburn.org/pubs/papers/rust-ismm-2016.pdf), they found that few uses of `unsafe` were necessary to still get high performance. This is for garbage collection and not PL implementation like we're doing, but it's similar enough to make me believe that good software engineering can circumvent abusing ugly unsafe code.
 
-### rust semantics don't play well with self-optimizing nodes
+### rust semantics also don't play well with self-replacing nodes
 
 The way I wanted to implement inline caching mirrors how we do it in our other AST interpreters: replacing an unoptimized `NormalMessageNode` with a *specialized*, optimized `CachedMessageNode`. Something like this:
 
@@ -124,13 +124,13 @@ So to replace an uninitialized node, we'd do something like this:
 *self = ast::Message::Cached(method_def, class_identifier, self.message);
 ```
 
-Sounds good, right? We replace it and transfer ownership of the messag... wait this code doesn't work because I can't transfer ownership in Rust actually oops can I
+Sounds good, right? We replace it and transfer ownership of the messag... wait this code doesn't work because I can't transfer ownership in Rust actually oops can I?
 
 Really, it should be allowed: I want to tell Rust to transfer ownership of the `GenericMessage` from the node to its new, optimized version. My understanding is that this fails because creating this new node and assigning it to `self` are two distinct operations: we create a new node that takes ownership of `self.message` and THEN make `self` that node, when really `self` keeps ownership of the message throughout the whole thing.
 
 If anyone knows how this is achievable, I'd love to know. Is there a way to use `std::mem::replace` somehow, or has someone made some crate that addresses this?
 
-EDIT: This is a case of me not being knowledgeable enough, I did get the answers I wanted there! `std::mem::take` solves my problem. The annoying thing (and why I'd originally disregarded it as a potential solution, which was my mistake) is that this means my `Message` has to implement the `Default` trait, since it replaces the taken value with a default - and the idea of making a default message sounded weird to me, so unlikely to be a good solution.
+EDIT: I was just lacking knowledge, I did get the answers I wanted there! `std::mem::take` solves my problem. The annoying thing (and why I'd originally disregarded it as a potential solution, which was my mistake) is that this means my `Message` has to implement the `Default` trait, since it replaces the taken value with a default - and the idea of making a default message sounded weird to me, so unlikely to be a good solution.
 
 So this implementation could work, as far as I understand. But I don't think it'd be particularly faster and the approach I follow below sounds more straightforward anyway. Still, that's very good to know about for the future.
 
@@ -231,7 +231,7 @@ I originally had a section where I implemented inline caching as a linked list i
 ### what have we learned?
 - you might have learned how inline caching works? But I didn't learn anything since I already knew that. You've effectively ripped me off.
 - monomorphic callsites everywhere! That might be unexpected to some, and makes inline caching not be as beneficial performance-wise as you'd think in many cases.
-- we've seen Rust doesn't like self-referential, self-modifying tree structures. Which is a pain for me, and advice is more than welcome (tell me on [Twitter](https://twitter.com/OctaveLarose)).
+- we've seen Rust doesn't like self-modifying tree structures: I have to use `unsafe` a lot to make the AST mutable. Which is a pain for me since I want a **self-optimizing AST** in the future, and advice to implement a safe(r) version of my interpreter is more than welcome (tell me on [Twitter](https://twitter.com/OctaveLarose)).
   - my understanding is that managing my own heap/arena of AST nodes may solve it? More on that in the future, since I believe it's what I'll have to implement
   - [Rc::new_cyclic](https://doc.rust-lang.org/stable/std/rc/struct.Rc.html#method.new_cyclic) miiight be helpful here as well? I'm not entirely sure.
 - shoutout to good benchmark running/visualizing software to allow me to do such a thorough comparison of various slightly different versions of my system!
