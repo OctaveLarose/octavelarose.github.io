@@ -5,6 +5,14 @@ author:
 - Octave Larose
 ---
 
+## a disclaimer:
+
+This article garnered a lot of attention for my use of the word `unsafe`. Frankly it's my bad for using terms like "debatably ethical" in a tongue-and-cheek way when it's in fact hardly unethical: no one but myself is affected by potential `unsafe` bugs, as this post is just about a research project (with 1, sometimes 2 people working on it). I'm not a company, we have no users, I'm just working on my research on interpreter performance: and since performance matters, `unsafe` has benefits for me.
+
+If you think I'm definitely abusing the `unsafe` keyword though, please let me know! Feedback is always appreciated and I'd love to avoid it you can provide potential alternatives.
+
+## what am i reading?
+
 This is part of a series of blog posts relating my experience pushing the performance of programming language interpreters written in Rust. For added context, read the start of [my first blog post]({% post_url 2024-05-29-to-do-inlining %}).
 
 In short: we optimize AST (Abstract Syntax Tree) and BC (Bytecode) Rust-written implementations of a Smalltalk-based research language called [SOM](http://som-st.github.io/), in hopes of getting them fast enough to meaningfully compare them with other SOM implementations. The ultimate goal is seeing how far we can push the AST's performance, the BC being mostly to be a meaningful point of comparison (which means its performance needs to be similarly pushed).
