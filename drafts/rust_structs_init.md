@@ -5,6 +5,14 @@ author:
 - Octave Larose
 ---
 
+THIS IS ALL A SILLY MISTAKE ON MY PART AND TO THIS DAY I DON'T KNOW IF I HAVE A POINT OR NOT. MAYBE?
+
+THIS IS ALL A SILLY MISTAKE ON MY PART AND TO THIS DAY I DON'T KNOW IF I HAVE A POINT OR NOT. MAYBE?
+
+THIS IS ALL A SILLY MISTAKE ON MY PART AND TO THIS DAY I DON'T KNOW IF I HAVE A POINT OR NOT. MAYBE?
+
+---
+
 This is part of a series of blog posts relating my experience pushing the performance of programming language interpreters written in Rust. But this doesn't matter here: I've nothing new and interesting to talk about, I've just been fixing bugs. Instead I just want to share some gripes I have with the Rust language.
 
 ## why is this not valid
