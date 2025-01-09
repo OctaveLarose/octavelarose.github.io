@@ -6,6 +6,7 @@ author:
 ---
 
 This is a blog post about the garbage collection framework [MMTk](https://github.com/mmtk/mmtk-core) and my experience implementing it into our own Rust-based intepreters.
+If you only care about the MMTk implementation bits, you can probably jump directly to [this section](#implementation-mmtking) and it will not hurt my feelings.
 
 ## what am i reading?
 
@@ -52,14 +53,16 @@ So pointer access is *slow*, and we do a lot of it.
 But we need some sort of garbage collection to manage our memory, and if reference counting doesn't cut it, what can we do instead?
 
 ## tracing garbage collection
-Tracing garbage collection is another form of automatic memory management. It looks through all our objects to determine which ones should be discarded. Our objects are all a big graph, and GC *traces* it to see which objects are *reachable*: if you can no longer be found in the graph, you're no longer in use and in the garbage you go.
+Tracing garbage collection is another form of automatic memory management. It looks through all our objects to determine which ones should be discarded.
+Our objects are all a big graph that starts with several *roots*, and GC *traces* it to see which objects are *reachable*: if you can no longer be found in the graph, you're no longer in use and in the garbage you go.
 
 Reference counting has to check whether or not to discard an object everytime we stop using a reference to it.
-Tracing GC just waits until we run out of memory, in which case we stop the world and trace the object graph[^stop-the-world].
+Tracing GC just waits until we run out of memory, in which case we stop the world to stop running our code so that we can safely trace the object graph without it being modifiable mid-analysis[^stop-the-world].
 
 Added benefit, which turns out to be a major performance win in our case: we manage our data on our own heap, not letting Rust do it.
 This is obviously harder to work with since we ditch [ownership](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html) entirely, which is a core Rust feature. But now allocation much faster by default: we always keep a pointer to the next free element in the heap, and allocation is just bumping it up by the requested amount.
 
+<a name="bump-allocator"></a>
 ```rust
 let new_cursor = self.alloc_bump_ptr.cursor + size;
 if new_cursor < self.alloc_bump_ptr.limit {
@@ -67,10 +70,10 @@ if new_cursor < self.alloc_bump_ptr.limit {
     self.alloc_bump_ptr.cursor = new_cursor;
     addr
 } else {
-    panic!("out of space, we need to collect garbage")
+    panic!("out of space, we need to collect garbage first")
 }
 ```
-(code simplified from [an example in the MMTk docs](https://docs.mmtk.io/portingguide/perf_tuning/alloc.html#option-3-embed-the-fast-path-struct]))
+(code simplified from [an example in the MMTk docs](https://docs.mmtk.io/portingguide/perf_tuning/alloc.html#option-3-embed-the-fast-path-struct))
 
 And as it turns out, even without implementing any garbage collection algorithm, we get a lot of performance[^nogc-performance] just from ditching reference counting and having faster allocation! If we manage our heap, but we set no upper limit to it and we keep increasing its size when it becomes full, then...
 ![bde96ba315406117f87c3246310f6e990df557d4..be7d7c13cd789f2b977aaa66817c2690ec3c005f](/assets/mmtk/nogc-speedup.png)
@@ -81,17 +84,20 @@ But until then, we need to actually periodically collect all that accumulating g
 
 ## what's mmtk then?
 
-The [MMTk](https://www.mmtk.io/) project has been around since 2004. Its goal is simple: tracing garbage collection is notoriously hard, so many would benefit greatly from a GC framework that does a lot of the heavy lifting. Through its API and its bindings, you can implement any of several *plans*(garbage collection algorithms - mark and sweep, semispace, )
+The [MMTk](https://www.mmtk.io/) project has been around since 2004. Tracing garbage collection is notoriously hard, so MMTk aims to provide a language-agnostic GC framework to do a lot of the heavy lifting. [Here's a short video introduction](https://www.youtube.com/watch?v=0mldpiYW1X4).
 
-It's got sturdy bindings for [OpenJDK](https://github.com/mmtk/mmtk-openjdk), [V8](https://github.com/mmtk/mmtk-v8) and some for [Julia](https://github.com/mmtk/mmtk-julia) are actively in development. It clearly works with much larger virtual machines than mine.
+Through MMTk's API and bindings, you can incorporate any of several pre-existing *plans* (garbage collection algorithms - mark and sweep, semispace, etc.) into your VM, or create your own plan. So you can easily support various GC algorithms, as opposed to tightly coupling your VM to any chosen GC approach; and all this in any language, AND while being fast. It's really, really cool stuff.
+
+It's got sturdy bindings for [OpenJDK](https://github.com/mmtk/mmtk-openjdk), [V8](https://github.com/mmtk/mmtk-v8), among others like for [Julia](https://github.com/mmtk/mmtk-julia) or [Ruby](https://github.com/mmtk/mmtk-ruby), so it clearly works with much larger virtual machines than mine.
 
 My reasoning behind choosing MMTk for `som-rs` was:
-- I want to be able to easily switch between different GC strategies.
+- I want to be able to easily switch between different GC strategies, because modularity makes me happy and so that I have the ability to evaluate the performance impact of different algorithms on my work if I want.
 - I want to *not* have to implement these GC strategies myself, since I *know* this would take me ages. I'm more used to [metacompilation systems](https://stefan-marr.de/papers/oopsla-larose-et-al-ast-vs-bytecode-interpreters-in-the-age-of-meta-compilation/) giving me GC for free than me implementing it myself...
-- It is written in Rust! The previously mentioned bindings need to do FFI, but we sure don't.
-- I want it to not be a massive timesink please
+- It is written in Rust! The previously mentioned bindings needed to do [FFI](https://en.wikipedia.org/wiki/Foreign_function_interface), but *we* sure don't.
 
-But software is war[^software-is-war], and all warfare is based on deception: therefore I deceived myself with unreasonably short estimates. So this last point does not account for the fact that implementing GC did in fact take me forever. Oops. This is a major motivation for this blog post: sharing my experience and my code, to help others get up to speed faster than I did.
+Though with regards to it not taking ages to implement, software is war[^software-is-war] and all warfare is based on deception: therefore I unfortunately deceived myself with unreasonably short time estimates.
+
+So this last point does not account for the fact that implementing GC did in fact take me forever (oops). This is a major motivation for this blog post: sharing my experience and my code, to help others get up to speed faster than I did.
 
 All warfare is also based on planning, so the game plan was:
 - get a basic *mark-and-sweep* GC working: it traverses the graph, finds and marks the garbage, sweeps it.
@@ -115,7 +121,7 @@ An obvious improvement their work features is that they make clever use of lifet
 The reason is that since it was already a *major* hurdle to get my interpreters working correctly with tracing GC, I wanted the simplest solution... this interpreter is just a solo dev research project.
 If myself or others continue improving `som-rs` in the future though, I would very much want this addressed.
 
-Anyway, we've now got our own heap pointer wrapper. Thanks to Rust's type system, we can implement `Deref` on it to be able to access its underlying data as if it were a `&T`, avoiding a lot of boilerplate code.
+Anyway, we've now got our own heap pointer wrapper. Thanks to Rust's type system, we can implement `Deref`/`DerefMut` on it to be able to access its underlying data as if it were a `&T`/`&mut T`, avoiding a lot of boilerplate code.
 
 ```rust
 impl<T> Deref for Gc<T> {
@@ -130,23 +136,32 @@ impl<T> Deref for Gc<T> {
 
 We've obviously been moving away from normal Rust and all its guarantees, which is annoying, but there's another nice example of how we can still leverage the type system to our advantage. A wrapper has the clear benefit of providing explicit, meaninful differentiation between an arbitrary pointer and a pointer to an object in our heap.
 But it's got an another major advantage for debugging: we can check that our pointers are valid whenever we dereference them.
-Our `debug_assert_valid_heap_ptr` macro verifies that we're not accessing some random data, and that it indeed points into our heap.
+Our `debug_assert_valid_heap_ptr` macro verifies that we're indeed pointing into our heap and not to random data, so that we didn't mess up many many cycles ago.
 
-This is a godsend when using garbage collection plans that can move your data around: if our safety check sees you're pointing to data that has since been moved, you forgot to update that pointer when moving, and you've got a bug.
+This is especially a godsend when using garbage collection plans that can move your data around: if our safety check sees you're pointing to data that has since been moved, you forgot to update that pointer when moving, and you've got a bug.
 More on moving GC later.
 (Note for MMTk devs: it would then be a forwarding pointer, but the indirection would be a slowdown, so we want everything copied onto the new heap)
 
+<!--
 We've now got full control over our object heap, so we can really do whatever. As an example, since we've also got immutable lists in our interpreter, nothing is stopping us from turning a `Gc<Vec<T>>` into a custom `GcSlice<T>` type:
 ```rust
 pub struct GcSlice<T>(Gc<T>);
 ```
-...which is really just a raw pointer to consecutive `T` types and provides methods to access them. [TODO: do i keep this or does it raise more questions?]
+...which is really just a raw pointer to consecutive `T` types and provides methods to access them. [TODO: do i keep this or does it raise more questions?] -->
 
 ## implementation: mmtk'ing
 
-MMTk provides the very helpful [DummyVM](https://github.com/mmtk/mmtk-core/tree/master/docs/dummyvm) to highlight many ways of interacting with its API, which I used as a base - and you should too. It assumes we want to do FFI, and so has a lot of e.g. `extern "C"`, but we don't even need that since we never exit Rust.
+MMTk provides the very helpful [DummyVM](https://github.com/mmtk/mmtk-core/tree/master/docs/dummyvm) to showcase interactions with its API ([described here](https://docs.mmtk.io/api/mmtk/memory_manager/index.html)), which I used as a base - and you probably should too.
+It assumes we want to do FFI, and so has a lot of e.g. `extern "C"`, but we don't even need that since we never exit Rust.
+This won't be a thorough overview since I don't need to fully leverage MMTk's features, more like a starting point.
 
-We declare our VM:
+To interact with MMTk, we need to create an MMTk instance. For that, we create a builder with our chosen options and our pre-existing `"MarkSweep"` plan, then we call `mmtk_init::<SOMVM>(&builder)` to get a nice `MMTK<SOMVM>` instance.
+
+We also need to declare a *mutator*, a per-thread data structure to manage allocations, so a pretty major one.
+We call `mmtk_bind_mutator` to ask MMTk to please give us a `Mutator<SOMVM>` for our current and only execution thread, which we'll store and use to allocate memory. And now we're all sorted.
+
+But that `SOMVM` didn't come out nowhere, did it? That's the name we've given to our VM in our big [`VMBinding`](https://docs.mmtk.io/api/mmtk/vm/trait.VMBinding.html) with MMTk, a binding which looks like this:
+
 ```rust
 impl VMBinding for SOMVM {
     type VMObjectModel = object_model::VMObjectModel;
@@ -154,25 +169,53 @@ impl VMBinding for SOMVM {
     type VMCollection = collection::VMCollection;
     type VMActivePlan = active_plan::VMActivePlan;
     type VMReferenceGlue = reference_glue::VMReferenceGlue;
-    type VMSlot = DummyVMSlot;
-    type VMMemorySlice = mmtk::vm::slot::UnimplementedMemorySlice;
+    type VMSlot = SOMSlot;
+    type VMMemorySlice = mmtk::vm::slot::UnimplementedMemorySlice<SOMSlot>;
 
     /// Allowed maximum alignment in bytes.
     const MAX_ALIGNMENT: usize = 1 << 6;
 }
 ```
 
-This is code from `DummyVM`.
-- VMObjectModel
-- VMReferenceGlue: I never needed that
+And now there's a lot going on. Here's what everything means:
+
+- `VMObjectModel`: self-explanatory, how objects are represented.
+  - The defaults here worked well for me. My main change was implementing the `copy` function, since semispace needs to copy objects.
+- `VMScanning`: pretty self-explanatory again, how to scan the object graph. Boils down to implementing two of the most important and complex functions, which we'll elaborate on [in a little bit](#scanning):
+  - the `scan_object` function to scan any object in your VM.
+  - ...and the `scan_roots` function to tell MMTk what the roots are. Very nice
+- `VMCollection`: methods for garbage collection. The only needed ones are:
+  - `block_for_gc`: stop the world to let a collection happen. For us, it's pretty much just using a [`CondVar`](https://doc.rust-lang.org/std/sync/struct.Condvar.html) to stop our main and only mutator thread.
+  - `stop_all_mutators`: stop all mutator threads. We've only got one and `block_for_gc` has already stopped it, so we just tell MMTk to go ahead.
+  - `spawn_gc_thread`: spawn a thread that MMTk will used for GC. In our case, just a glorified `std::thread::spawn` call.
+  - `resume_mutators`: notify that same `CondVar` that GC has occurred, and that we can go back to executing our code.
+- `VMActivePlan`: methods for the current plan [Question for MMTK authors: I find that a bit unclear - I think the name confuses me. How are mutators related to the plan in specific ways?].
+  - just has methods to tell MMTk how to access mutators, so we happily provide it our stored `Mutator<SOMVM>` reference.
+- `VMReferenceGlue`: for reference processing (like weak references) and finalizers. I never needed that [Question for MMTk authors: is me not needing it indicative of a VM design flaw?]
+- `VMSlot`: we'll talk more about slots [later on](#slots). MMTk provides `SimpleSlot` which works for most cases, but we did need to make our own `SOMSlot` here.
+- `VMMemorySlice`: to represent abstract memory slices. As the "unimplemented" indicates, I never implemented that either, though.
+- ...and I guess the `MAX_ALIGNMENT` variable for the maximum [alignment](https://en.wikipedia.org/wiki/Data_structure_alignment), and the default is fine by me.
+
+All done. An allocation then looks like:
+```rust
+let new_ptr: usize = mmtk_alloc(&mut mutator,
+                                size_requested,
+                                GC_ALIGN, // (alignment): 8 for us
+                                GC_OFFSET, // (offset): 0
+                                AllocationSemantics::Default);
+```
+
+When we request too much memory and GC gets triggered, we've provided everything we need for MMTk to stop the world, scan our object graph and clean up our mess.
+
+Additionally, we say `AllocationSemantics::Default` to indicate we've got no special requirement for this object, but we've got other options such as requesting it to be `Immortal` so that it's never collected, `NonMoving` to never be moved, or `Los` to allocate large objects specifically [TODO: for performance reasons?].
+[List of options here](https://docs.mmtk.io/api/mmtk/plan/enum.AllocationSemantics.html).
+
+We can also make allocation faster such as with that [bump allocator](#bump-allocator) example earlier, instead of ever calling `mmtk_alloc` directly.
+
+## scanning
 
 
-To interact with MMTk, we need to create an MMTk instance. For that, we create a builder with our chosen options and our pre-existing `"MarkSweep"` plan.
-Then we call `mmtk_init::<SOMVM>(&builder)`, store that in a static [`OnceLock`](https://doc.rust-lang.org/stable/std/sync/struct.OnceLock.html) and we can get going.
-
-
-The API is [described here](https://docs.mmtk.io/api/mmtk/memory_manager/index.html).
-
+## slots
 
 ## GC bugs (oh no)
 talk about bugs i had
@@ -197,4 +240,4 @@ wooo
 [^procrastination]: Annoying, I know, since it makes potentially interesting data not so usable, and I *might* write a more thorough analysis of each experiment of mine in the future if I can make it interesting. And look, you yourself also procrastinate by implementing new features instead of fixing bugs. We are kindred spirits, you and I.
 [^stop-the-world]: Some GCs don't stop the world, but that's a whole other level of complexity so we don't do it. I am but one little guy. There's no reason you couldn't use MMTk for that, though. [Question for MMTk authors: can you give an example, please? Or am I mistaken somehow?]
 [^nogc-performance]: Actually unsure why the AST benefited less, but I would assume that's due to it being a lot slower at the time, so GC solving only -some- of its performance problems. [TODO: proofreaders please am i making sense?]
-[^software-is-war]: It's also love.
+[^software-is-war]: On a metaphysical level, everything is war and love - probably. I had philosophy classes back in high school, so I must know what I'm talking about.
