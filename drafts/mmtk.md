@@ -6,7 +6,10 @@ author:
 ---
 
 This is a blog post about the garbage collection framework [MMTk](https://github.com/mmtk/mmtk-core) and my experience implementing it into our own Rust-based intepreters.
-If you only care about the MMTk implementation bits, you can probably jump directly to [this section](#implementation-mmtking) and it will not hurt my feelings.
+
+The goal of this blog post is to remain accessible, such that people with limited GC knowledge can still get value out of it.
+
+Reading it from the start is probably best for most. Alternatively, if you only care about the MMTk technical implementation bits, you can probably jump directly to [this section](#implementation-mmtking) and it will not hurt my feelings.
 
 ## what am i reading?
 
@@ -37,7 +40,7 @@ I should mention that the majority of such theoretically unrelated changes were 
 But what did we change, and why?
 
 ## reference counting: the existing, naive approach
-We've got data, we need pointers. Rust offers several pointer types, be it
+We've got data, we need pointers to it. The Rust pointer catalogue is pretty much:
 - standard references with `&T` (pointers which abide by Rust's safety guarantees)
 - ugly raw pointers `*const T` (bad boys which disregard safety guarantees)
 - or smart pointers, most notably `Box<T>`, `Rc<T>` and `RefCell<T>`.
@@ -45,12 +48,13 @@ We've got data, we need pointers. Rust offers several pointer types, be it
 We were using smart pointers a lot since they also tend to *own* the data they reference, which tends to be a lot more convenient than trying to pass references around everywhere.
 
 The basic case is a `Box<T>`: it's just a pointer to the heap, prettified and wrapped by Rust. OK, say in our interpreters any pointer to a `Class` object will be a `Box<Class>`. Instances of this class need a `Class` pointer to read static variables from it and - oh wait, `Box<T>` uniquely owns the data, so these instances can't all own the same `Box<T>`.
+
 So `Rc<T>` (which stands for *reference counting*) comes to the rescue: data can be referenced in several places, since we keep track of its users through a counter. When that counter reaches 0, the final user of that `Rc<T>` has sadly passed away, the data is no longer needed and so it's discarded.
 
 And we also want to be able to write to those static variables, so we need mutable access to `T`, which is what `RefCell<T>` provides.
 So the final pointer type we choose: `Rc<RefCell<T>>`. Very nice.
 
-We can successfully access and modify pesky types like `Class` from many different places and so have functional interpreters, Rust manages all the memory for us and is happy, and we're happy because Rust is happy and automatically manages all the memory for us and because Rust is happy. Everyone and everything is happy.
+We can successfully access and modify pesky types like `Class` from many different places and so we have functional interpreters, Rust manages all the memory for us and is happy, and we're happy because Rust is happy and automatically manages all the memory for us and because Rust is happy. Everyone and everything is happy.
 
 Except the runtime performance, which - as a reminder - is the thing we actually care about. Every single time we want to access e.g. a `Class`, we need to A) check that it's not already mutably borrowed by somebody else, B) increment the reference count by 1; then every time we drop a `Rc<RefCell<T>>` after using it, we need to decrement the reference count by 1.
 
@@ -98,14 +102,15 @@ It's got sturdy bindings for [OpenJDK](https://github.com/mmtk/mmtk-openjdk), [V
 My reasoning behind choosing MMTk for som-rs was:
 - I want to be able to easily switch between different GC strategies, because modularity makes me happy and so that I have the ability to evaluate the performance impact of different algorithms on my work if I want.
 - I want to *not* have to implement these GC strategies myself, since I *know* this would take me ages. I'm more used to [metacompilation systems](https://stefan-marr.de/papers/oopsla-larose-et-al-ast-vs-bytecode-interpreters-in-the-age-of-meta-compilation/) giving me GC for free than me implementing it myself...
-- It is written in Rust! The previously mentioned bindings needed to do [FFI](https://en.wikipedia.org/wiki/Foreign_function_interface), but *we* sure don't.
+- It is written in Rust! The previously mentioned bindings needed to deal with [FFI](https://en.wikipedia.org/wiki/Foreign_function_interface), but *we* sure don't.
 
 Though with regards to it not taking ages to implement, software is war[^software-is-war] and all warfare is based on deception: therefore I unfortunately deceived myself with unreasonably short time estimates.
 So this last point does not account for the fact that implementing GC did in fact take me forever (oops). This is a major motivation for this blog post: sharing my experience and my code, to help others get up to speed faster than I did.
 
 All warfare is also based on planning, so the game plan was:
 - get a basic *mark-and-sweep* GC working: it traverses the graph, finds and marks the garbage, sweeps it.
-- once that implementation is sturdy, move up to a better-but-more-complex *semispace* plan: heap split in two big chunks, garbage collection copies only live objects from one chunk to the other, that other chunk becomes the new "main" heap until garbage collection occurs again and we do it all the other way around.
+- once that implementation is sturdy, move up to a better-but-more-complex *moving* collector that can move data around.
+My pick was a *semispace* plan: heap split in two big chunks, garbage collection copies only live objects from one chunk to the other, that other chunk becomes the new "main" heap until garbage collection occurs again and we do it all the other way around.
 
 Then once I've got a moving GC off the ground, I can also theoretically easily start using a better MMTk-provided GC plan like [Immix](https://www.cs.cornell.edu/courses/cs6120/2019fa/blog/immix/). But I don't actually need a crazy well performing GC, just one that's *good enough* for my interpreters not to be much slower than they could be, in which case no meaningful conclusions could be drawn from their performance. So semispace should be good enough.
 
@@ -123,7 +128,7 @@ or kyren's [gc-arena](https://kyju.org/blog/rust-safe-garbage-collection/).
 
 An obvious improvement their work features is that they make clever use of lifetimes, while my pointers are always raw, which is a real shame.
 The reason is that since it was already a *major* hurdle to get my interpreters working correctly with tracing GC, I wanted the simplest solution... this interpreter is just a solo dev research project, so I sometimes cut corners so long as performance is optimal.
-I very much want this fixed in the future, though...
+I very much want this addressed in the future, though.
 
 Anyway, we've now got our own heap pointer wrapper. Thanks to Rust's type system, we can implement `Deref`/`DerefMut` on it to be able to access its underlying data as if it were a `&T`/`&mut T`, avoiding a *lot* of boilerplate code.
 
@@ -180,9 +185,6 @@ impl VMBinding for SOMVM {
     type VMReferenceGlue = reference_glue::VMReferenceGlue;
     type VMSlot = SOMSlot;
     type VMMemorySlice = mmtk::vm::slot::UnimplementedMemorySlice<SOMSlot>;
-
-    /// Allowed maximum alignment in bytes.
-    const MAX_ALIGNMENT: usize = 1 << 6;
 }
 ```
 
@@ -203,7 +205,6 @@ And now there's a lot going on. Here's what everything means:
 - `VMReferenceGlue`: for reference processing (like weak references) and finalizers. I never needed that [Question for MMTk authors: is me not needing it indicative of a VM design flaw?]
 - `VMSlot`: we'll talk more about slots [soon as well](#slots-first-mention). MMTk provides `SimpleSlot` which works for most cases, but we did need to make our own `SOMSlot` here.
 - `VMMemorySlice`: to represent abstract memory slices. As the "unimplemented" indicates, I never implemented that either, though.
-- ...and I guess the `MAX_ALIGNMENT` variable for the maximum [alignment](https://en.wikipedia.org/wiki/Data_structure_alignment), and the default is fine by me.
 
 All done. An allocation then looks like:
 ```rust
@@ -363,20 +364,26 @@ let slot: SimpleSlot = SimpleSlot::from(&inner_ptr)
 
 But what happens when Rust exists that scope? `inner_ptr` is reclaimed, and now accessing `&inner_ptr` doesn't represent anything: we've caused undefined behaviour (woo).
 
-So we need a new slot type TODO
+So we need a new slot type, one that handles extracting and storing pointers to a `Value` type, so:
 
-So here's our `SOMSlot` type:
+Behold:
+```rust
+pub struct RefValueSlot {
+    value: *mut Value,
+}
+```
+
+A pointer to a `Value`, that's it. Our slot type is now an enum to handle both possibilities:
 
 ```rust
 pub enum SOMSlot {
     Simple(SimpleSlot), // a `*mut Address` type.
-    RefValueSlot(RefValueSlot), // a doubtlessly exciting mystery.
+    RefValueSlot(RefValueSlot), // a `*mut Value` type.
 }
 ```
-
+<!--
 ...and the code for the `visit_value` function we used earlier:
 ```rust
-/// Visits a value, via a specialized `SOMSlot` for value types.
 /// # Safety
 /// Values passed to this function MUST live on the GC heap, or the pointer generated from the reference will be invalid.
 pub unsafe fn visit_value<'a>(val: &Value, slot_visitor: &'a mut (dyn SlotVisitor<SOMSlot> + 'a)) {
@@ -384,47 +391,126 @@ pub unsafe fn visit_value<'a>(val: &Value, slot_visitor: &'a mut (dyn SlotVisito
         slot_visitor.visit_slot(SOMSlot::make_ref_value_slot(val.get_stored_ptr()))
     }
 }
-```
+``` -->
 
-And finally, the code for `RefValueSlot`.
+And `RefValueSlot`'s associated code:
 
 ```rust
-pub struct RefValueSlot {
-    value: *mut Value,
-}
-
 impl Slot for RefValueSlot {
     // read from the slot.
     fn load(&self) -> Option<ObjectReference> {
         unsafe {
-            ObjectReference::from_ptr((*self.value).extract_pointer_bits())
+            ObjectReference::from_ptr((*self.value).extract_ptr())
         }
     }
 
     // write to the slot: update the pointer when GC moved the object
+    // to store the new pointer in the value, we just create a new one of the same type/tag with that pointer
     fn store(&self, object: ObjectReference) {
         unsafe {
-            // to store the new pointer in the value, we just create a new one of the same type/tag with that pointer, really
-            *self.value = Value::new((*self.value).tag(), object.as_ptr());
+            *self.value = Value::new((*self.value).tag(), object.extract_ptr());
         }
     }
 }
 ```
 
+And now we're sorted. That `visit_value` from earlier can use a `RefValueSlot`, and we can report any and all pointers - even the ones hidden away in `Value` types.
 
+## moving collector: top 3 nastiest bugs
+So far, we've been in the context of a MarkSweep GC. That's a hassle to get working, but it's doable. The real issue
 
-## GC bugs (oh no)
-I deserve to rant.
+Past me said it best in some commit description:
+> fixed one AST GC bug - X remain (with X superior or equal to 1)
 
-talk about bugs i had
+There's always another bug. There's definitely some bugs in my implementation right now, that my tests and benchmarks haven't managed to find.
 
-## More GC bugs (please stop)
-People talk about the issues that come from having to scan the stack. I know about these issues because I have read about GC before.
-This did not stop me from forgetting all about these issues and losing too much time being confused by those bugs
+Everyone likes a list, so here's a top 3.
+
+### number 3: oops stack variables
+That one also applies to non moving GCs, but a moving one made it even worse.
+
+People talk about the issues that come from forgetting to scan the stack;
+I know about these issues because I've read the work of said people;
+this did not stop me from forgetting to scan many, many values on the stack.
+
+And that's why `debug_assert_valid_heap_ptr`, our macro from the start, is a godsend.
 
 And that's why I'm grateful I don't handle the GC logic at least.
 [TODO READ https://manishearth.github.io/blog/2015/09/01/designing-a-gc-in-rust/]
 
+### number 1:
+Actually, that one is far more powerful. So:
+
+## a bug so nasty it escaped the previous section
+This was a crash *only in release builds*, *only on one unremarkable benchmark*. It was so nasty that I thought it was definitely a bug in Rust itself, but as it turns out, it's a feature.
+
+The bug was: shortly after GC triggers, a segmentation fault happens because we're accessing invalid data.
+It's clear that the issue is that some data does not get moved correctly even after collection. I put on my detective hat and tracked it down to a specific function, which allocates a new frame:
+
+```rust
+pub fn alloc_frame_from_method(
+    method: &Gc<Method>,
+    prev_frame: &mut Gc<Frame>,
+    gc_interface: &mut GCInterface,
+) -> Gc<Frame> {
+    let mut frame_ptr: Gc<Frame> = gc_interface.request_memory_for_type(FRAME_SIZE);
+
+    *frame_ptr = Frame::from_method(*method);
+
+    let args = prev_frame.stack_pop_n_last_elements(nbr_args);
+
+    Frame::init_frame_post_alloc(frame_ptr, args, max_stack_size, *prev_frame);
+
+    frame_ptr
+}
+```
+
+A bit simplified for your viewing pleasure.
+- we request memory, which might trigger GC.
+
+The bug was: `prev_frame`, of which a reference is stored in the newly allocated frame, does not get correctly adapted by the GC.
+Which does not make sense: it's a `&Gc<Frame>`, so a reference to a `Gc<Frame>` and not just some `Gc<Frame>` pointer left all alone dangling on the Rust stack.
+In fact, this very `Gc<Frame>` is `current_frame`, who was even declared as a root back in [the scanning section](#scanning).
+I did check, and this `Frame` very much does get moved: if it didn't, every single benchmark would explode.
+
+So what's the fix? After some soul searching, sanity questioning and much mixing of both, I did find a solution:
+
+```rust
+pub fn alloc_frame_from_method(...) -> Gc<Frame> {
+    // what
+    std::hint::black_box(&prev_frame)
+
+    // ...
+```
+
+[`std::hint::black_box`](https://doc.rust-lang.org/std/hint/fn.black_box.html). Which does:
+> An identity function that hints to the compiler to be maximally pessimistic about what black_box could do.
+
+Basically, we tell the compiler not to optimize based on `prev_frame`.
+
+If we read ahead a bit...
+> Note however, that black_box is only (and can only be) provided on a “best-effort” basis.
+> The extent to which it can block optimisations may vary depending upon the platform and code-gen backend used.
+> Programs cannot rely on black_box for correctness, beyond it behaving as the identity function. As such, **it must not be relied upon to control critical program behavior**.
+
+Well, shit.
+
+But our fix is just a temporary solution anyway, right? This is clearly a bug in Rust, who incorrectly assumes it can optimize code related to `prev_frame`.
+
+And then I was given [this link to Rust/GC notes by Manish Goregaokar](https://gist.github.com/Manishearth/70856e2f01e18935681c) (thanks [Jake](https://jakehughes.uk/) for making me aware of it!). This states:
+> One fundamental principle that I want to preserve is what I call "**The Frozen Reference Property**":
+> library code can safely assume that a reference `&'a T` can be treated as accessible memory of type `T`, with a constant address for the extent of the lifetime `'a`.
+
+It's the kind of thing you would have loved to know months ago...
+
+## some technical disclaimers
+
+There's a lot we didn't try, there's a lot we don't support. GC is complicated, having a GC in Rust is complicated, and life also tends to be complicated.
+
+- we never explicitly do finalization. That's a usually major point of complexity when doing GC, and to be honest one that I'm all too happy to circumvent.
+- no data on the Rust heap ever references `Gc<T>` pointers. We never need to do any sort of tracing in the Rust heap itself to find our data.
+This isn't enforced: you *could* make and use a `Box<Gc<T>>`, but your computer *would* explode. As far as I'm aware, it's impossible to enforce without tweaking Rust itself.
+- our interpreters are single-threaded. Making GC work well with a multi-threaded interpreter is a LOT of work.
 
 ## in conclusion
 Hopefully this shows MMTk might be an interesting choice for your own VM.
