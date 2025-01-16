@@ -7,21 +7,24 @@ author:
 
 This is a blog post about the garbage collection framework [MMTk](https://github.com/mmtk/mmtk-core) and my experience implementing it into our own Rust-based intepreters.
 
-The goal of this blog post is to remain accessible, such that people with limited GC knowledge can still get value out of it.
+The goal of this blog post is to remain accessible, such that people with limited knowledge of GC or of Rust can still get value out of it.
+Hopefully I succeed, but it's a fine line.
 
-Reading it from the start is probably best for most. Alternatively, if you only care about the MMTk technical implementation bits, you can probably jump directly to [this section](#implementation-mmtking) and it will not hurt my feelings.
+Reading it from the start is probably best for most. Alternatively, you can jump directly to the [MMTk introduction](#whats-mmtk-then) or [the technical implementation bits](#implementation-mmtking) and it will not hurt my feelings.
 
-## what am i reading?
+## introduction: who? what?
 
-This is part of a series of blog posts relating my experience pushing the performance of programming language interpreters written in Rust. For added context, read the start of [my first blog post]({% post_url 2024-05-29-to-do-inlining %}).
+### the who and some of the what
+The who is me. And this is part of a series of blog posts relating my experience pushing the performance of programming language interpreters written in Rust for my PhD. For added context, read the start of [my first blog post]({% post_url 2024-05-29-to-do-inlining %}).
 
-In short: we optimize AST (Abstract Syntax Tree) and BC (Bytecode) Rust-written implementations of a Smalltalk-based research language called [SOM](http://som-st.github.io/), in hopes of getting them fast enough to meaningfully compare them with other SOM implementations. The ultimate goal is seeing how far we can push the AST's performance, the BC being mostly to be a meaningful point of comparison (which means its performance needs to be similarly pushed).
+In short: we optimize AST (Abstract Syntax Tree) and BC (Bytecode) Rust-written implementations of a Smalltalk-based research language called [SOM](http://som-st.github.io/), in hopes of getting them fast enough to meaningfully compare them with other SOM implementations. The ultimate goal is seeing how far we can push the AST's performance, the BC being mostly to be a meaningful point of comparison (which means its performance needs to be pushed a similar amount).
 
-As a general rule, all my changes to the original interpreter (that led to speedups + don't need code cleanups) are present [here](https://github.com/OctaveLarose/som-rs/tree/best)...
+As a general rule, all my changes to the original interpreter (that aren't failed experiments) are present [here](https://github.com/OctaveLarose/som-rs/)...
 
-...and benchmark results are obtained using [Rebench](https://github.com/smarr/ReBench), then I get performance increase/decrease numbers and cool graphs using [RebenchDB](https://github.com/smarr/ReBenchDB). In fact, you can check out RebenchDB in action and all of my results for yourself [here](https://rebench.stefan-marr.de/som-rs/), where you can also admire the stupid names I give my git commits to amuse myself.
+...and benchmark results are obtained using [Rebench](https://github.com/smarr/ReBench), then I get performance increase/decrease numbers and cool graphs using [RebenchDB](https://github.com/smarr/ReBenchDB).
+You can check out RebenchDB in action and all of my results for yourself [here](https://rebench.stefan-marr.de/som-rs/), where you can also admire the stupid names I give my git commits to amuse myself.
 
-## what have i been doing?
+### the rest of the what ("what have i been doing")
 It's been ages since the previous blog post (six months / 7 years or so in dog years), so a lot of things. Most of which are described in hundreds of commits.
 
 The performance of both our AST and BC interpreters is much, much better: something like 100% (yeah!) for the AST and 70% for the BC. Both interpreters have been worked on extensively and even undertook major reworks, a lot of which are explained by this blog post's subject: we now do garbage collection using MMTk, instead of relying on reference counting.
@@ -47,7 +50,7 @@ We've got data, we need pointers to it. The Rust pointer catalogue is pretty muc
 
 We were using smart pointers a lot since they also tend to *own* the data they reference, which tends to be a lot more convenient than trying to pass references around everywhere.
 
-The basic case is a `Box<T>`: it's just a pointer to the heap, prettified and wrapped by Rust. OK, say in our interpreters any pointer to a `Class` object will be a `Box<Class>`. Instances of this class need a `Class` pointer to read static variables from it and - oh wait, `Box<T>` uniquely owns the data, so these instances can't all own the same `Box<T>`.
+The basic case is a `Box<T>`: it's just a pointer to the heap, prettified and wrapped by Rust. OK, say in our interpreters any pointer to a `Class` object will be a `Box<Class>`. Instances of this class need a `Class` pointer to read static variables from it and - oh wait, `Box<T>` uniquely owns the data, so these instances can't all own the same `Box<T>` because of [Rust ownership rules](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html).
 
 So `Rc<T>` (which stands for *reference counting*) comes to the rescue: data can be referenced in several places, since we keep track of its users through a counter. When that counter reaches 0, the final user of that `Rc<T>` has sadly passed away, the data is no longer needed and so it's discarded.
 
@@ -84,10 +87,11 @@ if new_cursor < self.alloc_bump_ptr.limit {
 ```
 (code simplified from [an example in the MMTk docs](https://docs.mmtk.io/portingguide/perf_tuning/alloc.html#option-3-embed-the-fast-path-struct))
 
-And as it turns out, even without implementing any garbage collection algorithm, we get a lot of performance[^nogc-performance] just from ditching reference counting and having faster allocation! If we manage our heap, but we set no upper limit to it and we keep increasing its size when it becomes full, then...
+And as it turns out, even without implementing any garbage collection algorithm, we get a lot of performance[^nogc-performance] just from ditching reference counting and having faster allocation! If we manage our heap, but we set no upper limit to its size and we keep increasing it when it becomes full, then...
 ![bde96ba315406117f87c3246310f6e990df557d4..be7d7c13cd789f2b977aaa66817c2690ec3c005f](/assets/mmtk/nogc-speedup.png)
 
-But we've got no garbage collection happening. This means to function for any program, we need an infinitely-sized heap, and right now our interpreters keep requesting more and more memory until the [OOM killer](https://linuxhandbook.com/oom-killer/) comes in with the steel chair. And to be fair, I *think* [RAM prices are going down](https://pcpartpicker.com/trends/price/memory/), so maybe 1 billion gigs of RAM will be a reasonable ask in 2-3 years.
+Pretty damn good speed just from ditching reference counting! But we've got no garbage collection happening.
+This means to function for any program, we need an infinitely-sized heap, and right now for longer-running benchmarks our interpreters keep requesting more and more memory until the [OOM killer](https://linuxhandbook.com/oom-killer/) comes in with the steel chair. And to be fair, I *think* [RAM prices are going down](https://pcpartpicker.com/trends/price/memory/), so maybe 1 billion gigs of RAM will be a reasonable ask in 2-3 years.
 
 But until then, we need to actually periodically collect all that accumulating garbage in the heap, and that's when MMTk comes in.
 
@@ -271,11 +275,9 @@ Roots are reported as slots, which we call `SOMSlot`. To quote [the documentatio
 
 A slot is essentially then just a reference to an object reference. MMTk provides a `SimpleSlot` type that's effectively a `*mut Address`, so a pointer to a pointer to an object.
 So we use them to declare where objects are. But if that was it, they would be a pointer and not a double pointer, right?
-As the documentation indicates, that's because we might want to update those references in the future: if GC moves the object, a single pointer would just point to bad data.
+As the documentation indicates, that's because we might want to update those references in the future: if GC moves the object, a non-double pointer would just point to outdated data.
 
 [TODO example]
-
-We had to make a `SOMSlot` which sometimes is a `SimpleSlot` but also sometimes not, [more on that in the next section](#slots).
 
 As seen in the code our roots are pretty much just A) our frames and B) our global variables.
 We declare our globals as roots by iterating over the vector that contains them, which makes sense, but how come we only report one of our many language frames?
@@ -316,7 +318,7 @@ match obj_type {
 ```
 
 It's not the prettiest[^scan-object], but fairly simple logic overall.
-The real trouble is not forgetting to scan one pointer and be confused when it randomly breaks some time after execution resumes...
+The real trouble is not forgetting to scan one pointer and be confused when it randomly breaks some time after execution resumes (which may or may not have happened many times).
 
 We invoke `slot_visitor.visit_slot(...)` throughout this code to report slots to MMTk. But there are also calls to `visit_value` in there.
 We have our own representation for values, which you'd think they would just be reportable as pointers in the same way, right?
@@ -417,17 +419,26 @@ impl Slot for RefValueSlot {
 And now we're sorted. That `visit_value` from earlier can use a `RefValueSlot`, and we can report any and all pointers - even the ones hidden away in `Value` types.
 
 ## moving collector: top 3 nastiest bugs
-So far, we've been in the context of a MarkSweep GC. That's a hassle to get working, but it's doable. The real issue
+So far, we've been in the context of a MarkSweep GC. That's already a hassle to get working, but the real issue comes when you start allowing data to be moved around.
 
-Past me said it best in some commit description:
+We've now got a marksweep collector working, and we can move on to a moving one.
+On the MMTk side, the main difference is having to implement the [`ObjectModel::copy`](https://docs.mmtk.io/api/mmtk/vm/trait.ObjectModel.html#tymethod.copy) function,
+so that MMTk knows how to copy data to its new location in memory. Roughly speaking, that's a glorified `memcpy` call - or `std::ptr::copy_nonoverlapping::<u8>` in Rust.
+
+Which sounds much simpler than reality. Because the main addition of a moving collector is the implication that anything can move around, and through this, many more bugs. Past me said it best in some commit description:
 > fixed one AST GC bug - X remain (with X superior or equal to 1)
 
-There's always another bug. There's definitely some bugs in my implementation right now, that my tests and benchmarks haven't managed to find.
+There's always another bug. There's definitely some bugs in my implementation right now, that all my tests and all my benchmarks haven't managed to find, yet.
+So we choose to play fast and loose with object permanence and just assume they don't exist until they do.
 
-Everyone likes a list, so here's a top 3.
+Here's a couple of bugs that manifested into reality in the past, though. And everyone likes a list, so here's a top 3.
 
-### number 3: oops stack variables
-That one also applies to non moving GCs, but a moving one made it even worse.
+### number 3: badly copying
+If it wasn't already clear we disregard Rust a lot for the sake of performance, you're about to learn our `Frame`s have self-referential pointers (ew).
+
+
+### number 2: oops stack variables
+That one also applies to non moving GCs, but a moving one made it a lot worse.
 
 People talk about the issues that come from forgetting to scan the stack;
 I know about these issues because I've read the work of said people;
@@ -435,14 +446,11 @@ this did not stop me from forgetting to scan many, many values on the stack.
 
 And that's why `debug_assert_valid_heap_ptr`, our macro from the start, is a godsend.
 
-And that's why I'm grateful I don't handle the GC logic at least.
-[TODO READ https://manishearth.github.io/blog/2015/09/01/designing-a-gc-in-rust/]
-
 ### number 1:
 Actually, that one is far more powerful. So:
 
 ## a bug so nasty it escaped the previous section
-This was a crash *only in release builds*, *only on one unremarkable benchmark*. It was so nasty that I thought it was definitely a bug in Rust itself, but as it turns out, it's a feature.
+This was a crash *only in release builds*, *only on one unremarkable benchmark*. It was so nasty that I thought it was definitely a bug in Rust itself, but as it turns out, it's most likely a feature.
 
 The bug was: shortly after GC triggers, a segmentation fault happens because we're accessing invalid data.
 It's clear that the issue is that some data does not get moved correctly even after collection. I put on my detective hat and tracked it down to a specific function, which allocates a new frame:
@@ -465,13 +473,19 @@ pub fn alloc_frame_from_method(
 }
 ```
 
-A bit simplified for your viewing pleasure.
+A bit simplified for your viewing pleasure. What we do is:
 - we request memory, which might trigger GC.
+- we write a new `Frame` to that memory.
+- we pop arguments off the previous frame [^args-off-prev-frame]...
+- ...and write them to the new one (plus other unimportant post allocation stuff)
 
-The bug was: `prev_frame`, of which a reference is stored in the newly allocated frame, does not get correctly adapted by the GC.
-Which does not make sense: it's a `&Gc<Frame>`, so a reference to a `Gc<Frame>` and not just some `Gc<Frame>` pointer left all alone dangling on the Rust stack.
-In fact, this very `Gc<Frame>` is `current_frame`, who was even declared as a root back in [the scanning section](#scanning).
-I did check, and this `Frame` very much does get moved: if it didn't, every single benchmark would explode.
+The incorrect behavior is: in some cases, when we trigger GC here, the `prev_frame` argument does not get correctly adapted by the GC. So `args` ends up wrong, `Frame::init_frame_post_alloc` is given an incorrect pointer, and we messed up.
+The question is now: *why*?
+
+Clearly, `prev_frame` is not properly reported to MMTk and doesn't get moved. Simple, except it's wrong: this `Frame` very much does get moved.
+In fact, this very `Gc<Frame>` is the `current_frame`, who was even declared as an explicit root back in [the scanning section](#scanning).
+We're also dealing with a `&Gc<Frame>`, so a reference to a `Gc<Frame>` and not just some `Gc<Frame>` pointer left all alone dangling on the Rust stack.
+If `Gc<Frame>` gets moved, a reference to it *should* still point to the right data.
 
 So what's the fix? After some soul searching, sanity questioning and much mixing of both, I did find a solution:
 
@@ -497,32 +511,46 @@ Well, shit.
 
 But our fix is just a temporary solution anyway, right? This is clearly a bug in Rust, who incorrectly assumes it can optimize code related to `prev_frame`.
 
-And then I was given [this link to Rust/GC notes by Manish Goregaokar](https://gist.github.com/Manishearth/70856e2f01e18935681c) (thanks [Jake](https://jakehughes.uk/) for making me aware of it!). This states:
+And then I was given [this link to notes by Manish Goregaokar](https://gist.github.com/Manishearth/70856e2f01e18935681c) (thanks [Jake](https://jakehughes.uk/) for making me aware of it!). This states:
 > One fundamental principle that I want to preserve is what I call "**The Frozen Reference Property**":
 > library code can safely assume that a reference `&'a T` can be treated as accessible memory of type `T`, with a constant address for the extent of the lifetime `'a`.
 
-It's the kind of thing you would have loved to know months ago...
+This is most likely the culprit, and exactly the kind of thing I would have loved to know months ago.
+As to why it doesn't break for the similar type `&Gc<Method>` next to it, or it only being in a few benchmarks, who knows...
+
+This bug is a nice example of GC in Rust being more of a pain.
+This is the kind of thing that you'd find in the language spec, with the exception that there's no proper spec out for Rust at the moment (there's a [team working on one, though](https://blog.rust-lang.org/inside-rust/2023/11/15/spec-vision.html)).
+
+These bugs all make me grateful I don't have to handle GC algorithm logic, at least. At least I have a trusted implementation of GC algorithms that I can rely on.
+[TODO READ https://manishearth.github.io/blog/2015/09/01/designing-a-gc-in-rust/]
 
 ## some technical disclaimers
 
 There's a lot we didn't try, there's a lot we don't support. GC is complicated, having a GC in Rust is complicated, and life also tends to be complicated.
 
 - we never explicitly do finalization. That's a usually major point of complexity when doing GC, and to be honest one that I'm all too happy to circumvent.
-- no data on the Rust heap ever references `Gc<T>` pointers. We never need to do any sort of tracing in the Rust heap itself to find our data.
-This isn't enforced: you *could* make and use a `Box<Gc<T>>`, but your computer *would* explode. As far as I'm aware, it's impossible to enforce without tweaking Rust itself.
+- arbitrary data on the Rust heap can't reference `Gc<T>` pointers, unless we know exactly where to find it (e.g. `Universe.current_frame`).
+The point is that we never want to do any sort of tracing in the Rust heap itself to find our data.
+This isn't enforced: you *could* make and use a `Box<Gc<T>>`, but your computer *would* explode. As far as I'm aware, it's impossible to enforce without modifying Rust itself.
 - our interpreters are single-threaded. Making GC work well with a multi-threaded interpreter is a LOT of work.
 
 ## in conclusion
-Hopefully this shows MMTk might be an interesting choice for your own VM.
+MMTk is a great idea and it does a good chunk of my job for me. The complexities of GC are still apparent even when using it, and there's still a myriad of ways to fuck up.
+And you've hopefully learned from some of my own fuckups!
 
-My implementation could use a lot more work, but can serve as a starting point. You can find the latest version of it [here](https://github.com/OctaveLarose/som-rs/tree/master/som-gc).
+I went over the basics of an MMTk-bound implementation, which hopefully is of help.
+My own implementation could use a *lot* more work and has some hacky bits, but it sure does make my interpreters run, and it should serve as a nice starting point.
+You can find the latest version of it [here](https://github.com/OctaveLarose/som-rs/tree/master/som-gc).
 
-wooo
+Thanks for reading if you did. If you didn't, I'm not thanking you, but you still have my respect.
+
+Goodbye for now
 
 ---
 
-[^procrastination]: Annoying, I know, since it makes potentially interesting data not so usable, and I *might* write a more thorough analysis of each experiment of mine in the future if I can make it interesting. And look, you yourself also procrastinate by implementing new features instead of fixing bugs. We are kindred spirits, you and I.
+[^procrastination]: Annoying, I know, since it makes potentially interesting data not so usable, and I *might* write a more thorough analysis of each experiment of mine in the future if I can make it interesting. And look, you yourself also procrastinate by implementing new features instead of fixing bugs. <!-- We are kindred spirits, you and I. -->
 [^stop-the-world]: Some GCs don't stop the world, but that's a whole other level of complexity so we don't do it. I am but one little guy. There's no reason you couldn't use MMTk for that, though. [Question for MMTk authors: can you give an example, please? Or am I mistaken somehow?]
 [^nogc-performance]: Actually unsure why the AST benefited less, but I would assume that's due to it being a lot slower at the time, so GC solving only -some- of its performance problems. [TODO: proofreaders please am i making sense?]
 [^software-is-war]: On a metaphysical level, everything is war and love - probably. I had philosophy classes back in high school, so I must know what I'm talking about.
 [^scan-object]: I'm thinking the best way would be to have each object implement some `VisitByGc` trait with their associated visit logic, to associate each `ObjMagicId` with a given type in a nice way and to do dynamic dispatch. Another TODO for the future...
+[^args-off-prev-frame]: Which, by the way, is how we keep those arguments reachable when GC happens. They're not on the Rust stack, but safe in the previous frame. That's also why we only pop them *after* GC might have occurred.
