@@ -6,6 +6,7 @@ author:
 ---
 
 This is a blog post about the garbage collection framework [MMTk](https://github.com/mmtk/mmtk-core) and my experience implementing it into our own Rust-based intepreters.
+Rust here is a focus-but-not-really, since we do away with a lot of its guarantees, for better or for worse but definitely for performance.
 
 The goal of this blog post is to remain accessible, such that people with limited knowledge of GC or of Rust can still get value out of it.
 Hopefully I succeed, but it's a fine line.
@@ -147,8 +148,8 @@ impl<T> Deref for Gc<T> {
 }
 ```
 
-We've obviously been moving away from normal Rust and all its guarantees, which is annoying, but there's another nice example of how we can still leverage the type system to our advantage. A wrapper has the clear benefit of providing explicit, meaninful differentiation between an arbitrary pointer and a pointer to an object in our heap.
-But it's got an another major advantage for debugging: we can check that our pointers are valid whenever we dereference them.
+We've obviously been moving away from normal Rust and all its guarantees, which is annoying, but there's another nice example of how we can still leverage the type system to our advantage. A wrapper has the clear benefit of providing explicit, zero-cost meaningful differentiation between an arbitrary pointer and a pointer to an object in our heap.
+But it's got an another major advantage for debugging: we can check that our pointers are valid whenever we dereference them (only in debug builds).
 Our `debug_assert_valid_heap_ptr` macro verifies that we're indeed pointing into our heap and not to random data, so that we didn't mess up many many cycles ago.
 
 ```rust
@@ -173,9 +174,9 @@ MMTk provides the very helpful [DummyVM](https://github.com/mmtk/mmtk-core/tree/
 It assumes we want to do FFI, and so has a lot of e.g. `extern "C"`, but we don't even need that since we never exit Rust.
 This won't be a thorough overview since I don't need to fully leverage MMTk's features, more like a starting point.
 
-To interact with MMTk, we need to create an MMTk instance. For that, we create a builder with our chosen options and our pre-existing `"MarkSweep"` plan, then we call `mmtk_init::<SOMVM>(&builder)` to get a nice `MMTK<SOMVM>` instance.
+To interact with MMTk, we need to create an MMTk instance. For that, we create a builder with our chosen options and our pre-existing `MarkSweep` plan, then we call `mmtk_init::<SOMVM>(&builder)` to get a nice `MMTK<SOMVM>` instance.
 
-We also need to declare a *mutator*, a per-thread data structure to manage allocations, so a pretty major one.
+We also need to declare a *mutator*, a per-thread data structure to manage allocations, so an incredibly important one.
 We call `mmtk_bind_mutator` to ask MMTk to please give us a `Mutator<SOMVM>` for our current and only execution thread, which we'll store and use to allocate memory. And now we're all sorted.
 
 But that `SOMVM` didn't come out of nowhere, did it? That's the name we've given to our VM in our big [`VMBinding`](https://docs.mmtk.io/api/mmtk/vm/trait.VMBinding.html) with MMTk, a binding which looks like this:
@@ -224,7 +225,7 @@ When we request too much memory and GC gets triggered, we've provided everything
 Additionally, we say `AllocationSemantics::Default` to indicate we've got no special requirement for this object, but we've got other options such as requesting it to be `Immortal` so that it's never collected, `NonMoving` to never be moved, or `Los` to allocate large objects specifically [TODO: for performance reasons?].
 [List of options here](https://docs.mmtk.io/api/mmtk/plan/enum.AllocationSemantics.html).
 
-We can also make allocation faster such as with that [bump allocator](#bump-allocator) example earlier, instead of ever calling `mmtk_alloc` directly.
+This is a simple, slow-ish way of allocating, which we can also make faster such as with that [bump allocator](#bump-allocator) example earlier, instead of ever calling `mmtk_alloc` directly.
 
 When allocating an object, we also reserve a space in the header for storing a magic number corresponding to its type.
 When MMTk visits the object graph, we need to know somehow how to interpret any sequence of bytes: did we allocate a `Class` or a `Frame` or a `String` there?
@@ -232,7 +233,7 @@ So we declare an enum `ObjType` that has variants for all the possible objects.
 In our VM, that's only 10 possible types or so, but we annoyingly still need to use a full `usize` to store it for alignment reasons.
 [MMTk authors question: was there a better solution than this header, though? Better use of pointer tagging than our VM does, perhaps?]
 
-So now our program can allocate any type with an associated `ObjType`, and we'll be able to reify types during scanning.
+So now our program can allocate any type with an associated `ObjType`, and we'll be able to reify types during scanning, which we'll implement now.
 
 ## scanning
 First, we need to tell MMTk what the object graph roots are, through `VMScanning`'s required `scan_roots_in_mutator_thread` function. Here's a simplified version of our code:
@@ -275,9 +276,20 @@ Roots are reported as slots, which we call `SOMSlot`. To quote [the documentatio
 
 A slot is essentially then just a reference to an object reference. MMTk provides a `SimpleSlot` type that's effectively a `*mut Address`, so a pointer to a pointer to an object.
 So we use them to declare where objects are. But if that was it, they would be a pointer and not a double pointer, right?
-As the documentation indicates, that's because we might want to update those references in the future: if GC moves the object, a non-double pointer would just point to outdated data.
 
-[TODO example]
+That would absolutely be enough for a non-moving collector, like our current mark-and-sweep. But as the documentation indicates, we need to be able to mutate that address because we might want to update those references in the future: when we start using moving GC, a non-double pointer would just point to outdated data.
+
+As an example, here's our block type:
+```rust
+pub struct Block {
+    // Reference to the captured stack frame.
+    pub frame: Option<Gc<Frame>>,
+    // Block environment needed for execution
+    pub blk_info: Gc<Method>,
+}
+```
+Both `frame` and `blk_info` are pointers. When moving GC happens, the frame and method referenced will change addresses, so these fields need to be updated.
+So we essentially report both `&mut blk.frame` and `&mut blk_info` (so `&mut Gc<T>` types, equivalent to a `*mut Address`) as slots, and MMTk takes care to update the references.
 
 As seen in the code our roots are pretty much just A) our frames and B) our global variables.
 We declare our globals as roots by iterating over the vector that contains them, which makes sense, but how come we only report one of our many language frames?
@@ -318,7 +330,7 @@ match obj_type {
 ```
 
 It's not the prettiest[^scan-object], but fairly simple logic overall.
-The real trouble is not forgetting to scan one pointer and be confused when it randomly breaks some time after execution resumes (which may or may not have happened many times).
+The real trouble is not forgetting to scan one pointer and be confused when it randomly breaks some time after execution resumes (which may or may not have happened to me several times).
 
 We invoke `slot_visitor.visit_slot(...)` throughout this code to report slots to MMTk. But there are also calls to `visit_value` in there.
 We have our own representation for values, which you'd think they would just be reportable as pointers in the same way, right?
@@ -337,7 +349,7 @@ pub enum ValueEnum {
     String(Gc<String>),
     Class(Gc<Class>),
     Invokable(Gc<Method>),
-    // ...
+    // ...and more
 }
 ```
 
@@ -351,11 +363,11 @@ pub struct Value {
 }
 ```
 
-We're not going to spend yet more time explaining how it works under the hood. The answer is essentially: a lot of bit masking to get values in and out.
+We're not going to spend yet more time explaining how it works under the hood, but the answer is essentially a lot of bit masking to get types+values in and out.
 To properly give credit, this NaN boxing implementation wasn't my work but was in fact written by [the original som-rs author](https://polomack.eu/) though never merged properly.
-I adapted it to my fork since for the extra performance.
+I did much tweaking to adapt it to my som-rs fork for the extra performance, but the core logic is still the same as his.
 
-Now the question is: a slot is a pointer to a pointer. If our value is a `u64` from which you can extract a pointer, how do you make a slot to that inner value?
+Now the question is: a slot is a double pointer. If our value is a `u64` from which you can extract a pointer, how do you make a slot to that hidden pointer?
 
 Well... we *can* get the pointer out of the `Value` and into a local variable, and make a `SimpleSlot` from a pointer to that local variable. Sure:
 
@@ -366,9 +378,8 @@ let slot: SimpleSlot = SimpleSlot::from(&inner_ptr)
 
 But what happens when Rust exists that scope? `inner_ptr` is reclaimed, and now accessing `&inner_ptr` doesn't represent anything: we've caused undefined behaviour (woo).
 
-So we need a new slot type, one that handles extracting and storing pointers to a `Value` type, so:
+Which is exactly why we need a new slot type, one that handles extracting and storing pointers to a `Value` type. Lo and behold:
 
-Behold:
 ```rust
 pub struct RefValueSlot {
     value: *mut Value,
@@ -395,7 +406,7 @@ pub unsafe fn visit_value<'a>(val: &Value, slot_visitor: &'a mut (dyn SlotVisito
 }
 ``` -->
 
-And `RefValueSlot`'s associated code:
+And `RefValueSlot`'s associated code does the bit masking to do reads/writes in its `Value`:
 
 ```rust
 impl Slot for RefValueSlot {
@@ -406,8 +417,10 @@ impl Slot for RefValueSlot {
         }
     }
 
-    // write to the slot: update the pointer when GC moved the object
-    // to store the new pointer in the value, we just create a new one of the same type/tag with that pointer
+    // write to the slot: update the pointer when GC moved the object.
+    //
+    // to store the new pointer in the value, we just create a new one
+    // of the same type (tag) with that pointer
     fn store(&self, object: ObjectReference) {
         unsafe {
             *self.value = Value::new((*self.value).tag(), object.extract_ptr());
@@ -419,32 +432,61 @@ impl Slot for RefValueSlot {
 And now we're sorted. That `visit_value` from earlier can use a `RefValueSlot`, and we can report any and all pointers - even the ones hidden away in `Value` types.
 
 ## moving collector: top 3 nastiest bugs
-So far, we've been in the context of a MarkSweep GC. That's already a hassle to get working, but the real issue comes when you start allowing data to be moved around.
+So far, we've been in the context of a MarkSweep GC. That's already a hassle to get working when it entails massive VM refactoring like it did for me, but the real issue comes when you start allowing data to be moved around.
 
-We've now got a marksweep collector working, and we can move on to a moving one.
 On the MMTk side, the main difference is having to implement the [`ObjectModel::copy`](https://docs.mmtk.io/api/mmtk/vm/trait.ObjectModel.html#tymethod.copy) function,
 so that MMTk knows how to copy data to its new location in memory. Roughly speaking, that's a glorified `memcpy` call - or `std::ptr::copy_nonoverlapping::<u8>` in Rust.
 
-Which sounds much simpler than reality. Because the main addition of a moving collector is the implication that anything can move around, and through this, many more bugs. Past me said it best in some commit description:
-> fixed one AST GC bug - X remain (with X superior or equal to 1)
+Which sounds much simpler than reality. Because the main addition of a moving collector is the implication that anything can move around, and through this, many more bugs.
+MMTk does provide the helpful [stress_factor](https://docs.rs/mmtk/latest/mmtk/util/options/struct.Options.html#structfield.stress_factor) option when building, which can trigger frequent stress GCs to help find nasty GC bugs, though.
+Still, there's definitely some bugs in my implementation right now, that all my tests and all my benchmarks haven't managed to find, yet.
+Until that happens, we can play fast and loose with object permanence and just assume they don't exist until they actually pop up.
 
-There's always another bug. There's definitely some bugs in my implementation right now, that all my tests and all my benchmarks haven't managed to find, yet.
-So we choose to play fast and loose with object permanence and just assume they don't exist until they do.
-
-Here's a couple of bugs that manifested into reality in the past, though. And everyone likes a list, so here's a top 3.
+Here's a couple of bugs that manifested into reality in the past, though, nicely categorized. And everyone likes a list, so here's a top 3.
 
 ### number 3: badly copying
-If it wasn't already clear we disregard Rust a lot for the sake of performance, you're about to learn our `Frame`s have self-referential pointers (ew).
+If it wasn't already clear we disregard Rust a lot for the sake of performance, let's talk about our `Frame`s having self-referential pointers (ew).
 
+When we allocate frames, we know how many `Value`s they're going to need: we know how many arguments and local variables there are in the scope a frame represents, and for our stack-based bytecode interpreter, we've precomputed the maximum stack size possible when executing their associated bytecode. So we can give them all a (N times `Value`)-sized little heap of their own like `[(maybe Stack)|Arguments|Locals]`, for fast access and hopefully make [our CPU cache happier](https://en.wikipedia.org/wiki/Locality_of_reference), which we store directly after the `Frame` so that we can do one single, bigger allocation.
+
+I'd made the frames store pointers to the areas of their mini heap that contain arguments and locals respectively, for faster access to them. Now I'm actually not positive it's a strict speedup over frequently doing `frame_ptr + size_of::<Frame>() + (stack_len * size_of::<Value>())` at runtime to access arguments/locals, but that was the assumption.
+
+Those pointers are self-referential-ish, so they get invalidated when copying: if the `Frame` moved from `0x00040000` to `0x00080000`, the pointers need to be changed from e.g. `0x00040010` to `0x00080010`. This led to needing to implement an `adapt_post_copy` function of my own to adjust them.
+
+Copying correctly also means reporting the correct size of data structures when you can't do a simple `size_of::<T>` call to get that info. That means not messing up when implementing [`get_current_size`/`get_size_when_copied`](https://docs.mmtk.io/api/mmtk/vm/trait.ObjectModel.html#tymethod.get_current_size), which MMTk relies on to get the size of the copied objects.
 
 ### number 2: oops stack variables
-That one also applies to non moving GCs, but a moving one made it a lot worse.
+That one also applies to non moving GCs, but a moving one made it a lot worse. People talk about the issues that come from forgetting to scan the stack; I know about these issues because I've read the work of said people; this did not stop me from forgetting to scan many, many values on the stack.
 
-People talk about the issues that come from forgetting to scan the stack;
-I know about these issues because I've read the work of said people;
-this did not stop me from forgetting to scan many, many values on the stack.
+Pointers to heap objects need to be able to be found by GC scans: if they don't, they can now be pointing to already collected data. Most notably, when you've got variables in local variables (so on the Rust stack), they need to remain reachable somehow.
 
-And that's why `debug_assert_valid_heap_ptr`, our macro from the start, is a godsend.
+That was an occasional issue in our `MarkSweep` collector, though not incredibly frequent since a lot of our data remains valid throughout execution: we don't have class unloading, so your `Gc<Class>` pointer will be safe everywhere. I used a few ugly hacks for the few parts that struggled with issues like these, and that did the trick.
+
+Now consider a moving collector: *any* reference not found by GC is now incorrectly pointing to the wrong heap. Sneakily, a lot of the time, that's enough to work for longer than you'd think: we don't erase the old heap, so it still contains valid data that you can mistakenly access.
+
+Consider a case where you can forget to update *some* pointers to the variable `foo`. You can do a `foo = false` operation only to have an `assert foo = true` work just fine shortly afterwards: because you accidentally wrote `false` to where `foo` *was*, on the old heap, while it's actually equal to `true` on the new, correct heap. And then if GC happens a second time and swaps both spaces again, your incorrect pointer to `foo` into what was the old heap is now a valid pointer into the current heap, but now to some random data in it and so all hell does break loose.
+
+These bugs are why `debug_assert_valid_heap_ptr` (our macro mentioned much earlier that checks pointers point into the right heap) was made, and why it's a godsend. Adding it to `Deref` checks every pointer access and you can easily identify pointers you missed when scanning.
+
+The BC interpreter is mostly fine since it's stack-based and just about every `Value` ends up pushed on an easily-accessible self-created stack. But the AST interpreter doesn't fare as well, since it was making extensive use of the Rust stack. As an example, here's how we dispatch a method with two arguments:
+
+```rust
+impl Evaluate for TernaryDispatchDispatchNode {
+    fn evaluate(&mut self, universe: &mut Universe) -> Return {
+        let receiver = self.dispatch_node.receiver.evaluate(universe);
+        let arg1 = self.arg1.evaluate(universe);
+        let arg2 = self.arg2.evaluate(universe);
+
+        self.dispatch_node.lookup_and_dispatch(receiver, arg1, arg2, universe)
+    }
+}
+```
+
+We evaluate the method's receiver, the two arguments we want to call it with, and then we dispatch it. Simple enough.
+But we need to consider than any `evaluate` call can trigger GC: if evaluating `arg1` or `arg2` triggered a collection, then the `receiver` pointer is now wrong: it was in a local variable on the Rust stack, which scanning cannot detect.
+
+The current fix is pretty ugly, as well as slightly slower: we keep a big `Vec<Value>` stack, and all variables we work with are pushed onto it, instead of being isolated in local variables. Then GC just checks/updates everything in that big self-made stack.
+LLVM does seem to be able to [find GC roots on the stack](https://llvm.org/docs/GarbageCollection.html#gcroot), so Rust could theoretically support it. So if there's a much nicer way of solving this problem than a self-managed stack, let me know.
 
 ### number 1:
 Actually, that one is far more powerful. So:
@@ -461,7 +503,7 @@ pub fn alloc_frame_from_method(
     prev_frame: &mut Gc<Frame>,
     gc_interface: &mut GCInterface,
 ) -> Gc<Frame> {
-    let mut frame_ptr: Gc<Frame> = gc_interface.request_memory_for_type(FRAME_SIZE);
+    let mut frame_ptr: Gc<Frame> = gc_interface.request_mem(FRAME_SIZE);
 
     *frame_ptr = Frame::from_method(*method);
 
@@ -521,24 +563,23 @@ As to why it doesn't break for the similar type `&Gc<Method>` next to it, or it 
 This bug is a nice example of GC in Rust being more of a pain.
 This is the kind of thing that you'd find in the language spec, with the exception that there's no proper spec out for Rust at the moment (there's a [team working on one, though](https://blog.rust-lang.org/inside-rust/2023/11/15/spec-vision.html)).
 
-These bugs all make me grateful I don't have to handle GC algorithm logic, at least. At least I have a trusted implementation of GC algorithms that I can rely on.
-[TODO READ https://manishearth.github.io/blog/2015/09/01/designing-a-gc-in-rust/]
+These bugs all make me grateful that I at least don't have to handle the GC algorithm logic: I have the trusted MMTk implementations of GC algorithms that I can rely on.
+So trusted, in fact, that I've not found bugs in them. All of the discussed bugs in my VM have been of my own doing! Which is great for MMTk and for users, and I realize that saying "I messed up in many ways" is not so great for me. Oops.
 
 ## some technical disclaimers
 
-There's a lot we didn't try, there's a lot we don't support. GC is complicated, having a GC in Rust is complicated, and life also tends to be complicated.
+Before finishing up: there's a lot we didn't try and there's a lot we don't support. GC is complicated, having a GC in Rust is complicated, and life also tends to be complicated.
 
 - we never explicitly do finalization. That's a usually major point of complexity when doing GC, and to be honest one that I'm all too happy to circumvent.
-- arbitrary data on the Rust heap can't reference `Gc<T>` pointers, unless we know exactly where to find it (e.g. `Universe.current_frame`).
-The point is that we never want to do any sort of tracing in the Rust heap itself to find our data.
-This isn't enforced: you *could* make and use a `Box<Gc<T>>`, but your computer *would* explode. As far as I'm aware, it's impossible to enforce without modifying Rust itself.
+- arbitrary data on the Rust heap can't reference `Gc<T>` pointers. We can store `Gc<T>` types on the Rust heap if we know exactly where to find them (e.g. `Universe.current_frame`), but we never get into any situations where we would want to do any sort of tracing in the Rust heap itself to find our data.
+This isn't enforced: you *could* make and use a `Box<Gc<T>>`, but your computer *would* explode after GC happens. As far as I'm aware, it's impossible to enforce without modifying Rust itself.
 - our interpreters are single-threaded. Making GC work well with a multi-threaded interpreter is a LOT of work.
 
 ## in conclusion
-MMTk is a great idea and it does a good chunk of my job for me. The complexities of GC are still apparent even when using it, and there's still a myriad of ways to fuck up.
-And you've hopefully learned from some of my own fuckups!
+You might have learned some things about GC, or some odd things about Rust, and hopefully a lot about MMTk. As for MMTk: it's a great concept with clearly solid execution. It does a good chunk of my job for me, though the complexities of GC are still apparent even when using it, and there's still a myriad of ways to mess up.
+Which is why you've hopefully learned from some of my own mistakes!
 
-I went over the basics of an MMTk-bound implementation, which hopefully is of help.
+I also went over the basics of an MMTk-bound implementation, which hopefully is of help or motivation.
 My own implementation could use a *lot* more work and has some hacky bits, but it sure does make my interpreters run, and it should serve as a nice starting point.
 You can find the latest version of it [here](https://github.com/OctaveLarose/som-rs/tree/master/som-gc).
 
@@ -548,7 +589,7 @@ Goodbye for now
 
 ---
 
-[^procrastination]: Annoying, I know, since it makes potentially interesting data not so usable, and I *might* write a more thorough analysis of each experiment of mine in the future if I can make it interesting. And look, you yourself also procrastinate by implementing new features instead of fixing bugs. <!-- We are kindred spirits, you and I. -->
+[^procrastination]: I *might* write a more thorough analysis of each experiment of mine in the future if I muster the courage to dig through all my data + if I can make it interesting. And look, you yourself also procrastinate by implementing new features instead of fixing bugs. <!-- We are kindred spirits, you and I. -->
 [^stop-the-world]: Some GCs don't stop the world, but that's a whole other level of complexity so we don't do it. I am but one little guy. There's no reason you couldn't use MMTk for that, though. [Question for MMTk authors: can you give an example, please? Or am I mistaken somehow?]
 [^nogc-performance]: Actually unsure why the AST benefited less, but I would assume that's due to it being a lot slower at the time, so GC solving only -some- of its performance problems. [TODO: proofreaders please am i making sense?]
 [^software-is-war]: On a metaphysical level, everything is war and love - probably. I had philosophy classes back in high school, so I must know what I'm talking about.
