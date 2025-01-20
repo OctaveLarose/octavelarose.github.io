@@ -5,18 +5,18 @@ author:
 - Octave Larose
 ---
 
-This is a blog post about the garbage collection framework [MMTk](https://github.com/mmtk/mmtk-core) and my experience implementing it into our own Rust-based intepreters.
+This is a blog post about the garbage collection framework [MMTk](https://github.com/mmtk/mmtk-core) and my experience implementing it into our own Rust-based intepreters, which are research projects.
 Rust here is a focus-but-not-really, since we do away with a lot of its guarantees, for better or for worse but definitely for performance.
 
 The goal of this blog post is to remain accessible, such that people with limited knowledge of GC or of Rust can still get value out of it.
-Hopefully I succeed, but it's a fine line.
+Hopefully I succeed, but it can be a fine line.
 
 Reading it from the start is probably best for most. Alternatively, you can jump directly to the [MMTk introduction](#whats-mmtk-then) or [the technical implementation bits](#implementation-mmtking) and it will not hurt my feelings.
 
 ## introduction: who? what?
 
 ### the who and some of the what
-The who is me. And this is part of a series of blog posts relating my experience pushing the performance of programming language interpreters written in Rust for my PhD. For added context, read the start of [my first blog post]({% post_url 2024-05-29-to-do-inlining %}).
+The who is me. And this is part of a series of blog posts relating my experience pushing the performance of programming language interpreters written in Rust for my PhD. For a bit more context, read the start of [my first blog post]({% post_url 2024-05-29-to-do-inlining %}).
 
 In short: we optimize AST (Abstract Syntax Tree) and BC (Bytecode) Rust-written implementations of a Smalltalk-based research language called [SOM](http://som-st.github.io/), in hopes of getting them fast enough to meaningfully compare them with other SOM implementations. The ultimate goal is seeing how far we can push the AST's performance, the BC being mostly to be a meaningful point of comparison (which means its performance needs to be pushed a similar amount).
 
@@ -26,7 +26,7 @@ As a general rule, all my changes to the original interpreter (that aren't faile
 You can check out RebenchDB in action and all of my results for yourself [here](https://rebench.stefan-marr.de/som-rs/), where you can also admire the stupid names I give my git commits to amuse myself.
 
 ### the rest of the what ("what have i been doing")
-It's been ages since the previous blog post (six months / 7 years or so in dog years), so a lot of things. Most of which are described in hundreds of commits.
+It's been ages since the previous blog post (six months / 7 years or so in dog years), so a lot of things. Most of which are described in a daunting amount of commits.
 
 The performance of both our AST and BC interpreters is much, much better: something like 100% (yeah!) for the AST and 70% for the BC. Both interpreters have been worked on extensively and even undertook major reworks, a lot of which are explained by this blog post's subject: we now do garbage collection using MMTk, instead of relying on reference counting.
 
@@ -44,7 +44,7 @@ I should mention that the majority of such theoretically unrelated changes were 
 But what did we change, and why?
 
 ## reference counting: the existing, naive approach
-We've got data, we need pointers to it. The Rust pointer catalogue is pretty much:
+We've got memory, we need pointers to it. The Rust pointer catalogue is pretty much:
 - standard references with `&T` (pointers which abide by Rust's safety guarantees)
 - ugly raw pointers `*const T` (bad boys which disregard safety guarantees)
 - or smart pointers, most notably `Box<T>`, `Rc<T>` and `RefCell<T>`.
@@ -98,9 +98,21 @@ But until then, we need to actually periodically collect all that accumulating g
 
 ## what's mmtk then?
 
-The [MMTk](https://www.mmtk.io/) project has been around since 2004. Tracing garbage collection is notoriously hard, so MMTk aims to provide a language-agnostic GC framework to do a lot of the heavy lifting. [Here's a short, great video introduction](https://www.youtube.com/watch?v=0mldpiYW1X4).
+Tracing GC (referred to as just "GC" from now on) is known for being hard to implement. Which at a glance may sound counterintuitive: the naive assumption is that you "just" need to:
+- implement your own heap and a simple memory allocator for it
+- some algorithm to collect the garbage
+- and some way to scan that memory for data.
 
-Through MMTk's API and bindings, you can incorporate any of several pre-existing *plans* (garbage collection algorithms - mark and sweep, semispace, etc.) into your VM, or create your own plan. So you can easily support various GC algorithms, as opposed to tightly coupling your VM to any chosen GC approach; and all this in any language, AND while being fast. It's really, *really* cool stuff.
+And sure, reference counting was pretty much free by being handled just with an `Rc` type, but this doesn't sound awful, probably.
+
+The devil's in the details, though. All three of these parts need to be sturdy for everything not to explode, and debugging any can be an ordeal. Your memory allocator has a bug and fails but *only* after a hundred thousand allocations? That's rough, buddy. Now imagine if the bug *also* only happened *sometimes*, and you've got a certified #classic GC bug[^gc-bug].
+
+Plus this all needs to be snugly implemented into your VM since you'll want to be able to allocate anything from just about anywhere, which creates a pretty strong dependency on the GC and makes it extremely hard to reuse, and you'd best be sure you properly implemented it or you will find nasty bugs ([more on that later...](#moving-collector-top-3-nastiest-bugs)).
+
+So looking back at our list, it sure would be nice if there was a language-agnostic framework that handled the heap, allocations, collections and maybe provided mechanisms to make memory scanning easier. In related news, [MMTk](https://www.mmtk.io/) is a language-agnostic framework that handles the heap, allocations, collections and provides mechanisms to make memory scanning easier.
+
+The project has been around since 2004. [Here's a short, great video introduction](https://www.youtube.com/watch?v=0mldpiYW1X4).
+Through MMTk's API and bindings, you can incorporate any of several pre-existing *plans* (garbage collection algorithms - mark and sweep, semispace, etc.) into your VM, or create your own plan. So you can easily support various GC algorithms, as opposed to tightly coupling your VM to any chosen GC approach; and all this in any language, AND while being fast. It's really, really cool stuff.
 
 It's got sturdy bindings for [OpenJDK](https://github.com/mmtk/mmtk-openjdk), [V8](https://github.com/mmtk/mmtk-v8), among others like for [Julia](https://github.com/mmtk/mmtk-julia) or [Ruby](https://github.com/mmtk/mmtk-ruby), so it clearly works with much larger virtual machines than mine.
 
@@ -110,7 +122,7 @@ My reasoning behind choosing MMTk for som-rs was:
 - It is written in Rust! The previously mentioned bindings needed to deal with [FFI](https://en.wikipedia.org/wiki/Foreign_function_interface), but *we* sure don't.
 
 Though with regards to it not taking ages to implement, software is war[^software-is-war] and all warfare is based on deception: therefore I unfortunately deceived myself with unreasonably short time estimates.
-So this last point does not account for the fact that implementing GC did in fact take me forever (oops). This is a major motivation for this blog post: sharing my experience and my code, to help others get up to speed faster than I did.
+So this last point does not account for the fact that implementing GC did in fact take me forever (oops). This is a major motivation for this blog post: sharing my experience and my code, to help others get up to speed faster than I did. I think the bulk of that time was spent fumbling around not knowing what I was doing.
 
 All warfare is also based on planning, so the game plan was:
 - get a basic *mark-and-sweep* GC working: it traverses the graph, finds and marks the garbage, sweeps it.
@@ -595,3 +607,4 @@ Goodbye for now
 [^software-is-war]: On a metaphysical level, everything is war and love - probably. I had philosophy classes back in high school, so I must know what I'm talking about.
 [^scan-object]: I'm thinking the best way would be to have each object implement some `VisitByGc` trait with their associated visit logic, to associate each `ObjMagicId` with a given type in a nice way and to do dynamic dispatch. Another TODO for the future...
 [^args-off-prev-frame]: Which, by the way, is how we keep those arguments reachable when GC happens. They're not on the Rust stack, but safe in the previous frame. That's also why we only pop them *after* GC might have occurred.
+[^gc-bug]: If that happens, I hope you're well aware of [record and replay debugging](https://rr-project.org/).
