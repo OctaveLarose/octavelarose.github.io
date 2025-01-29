@@ -1,15 +1,15 @@
 ---
 layout: post
-title: "Adding garbage collection to our Rust-based interpreters through MMTk"
+title: "Adding garbage collection to our Rust-based interpreters with MMTk"
 author:
 - Octave Larose
 ---
 
-This is a blog post about the garbage collection framework [MMTk](https://github.com/mmtk/mmtk-core) and my experience implementing it into our own Rust-based intepreters, which are research projects.
-Rust here is a focus-but-not-really, since we do away with a lot of its guarantees, for better or for worse, but definitely for performance.
+This is a blog post about the garbage collection framework [MMTk](https://github.com/mmtk/mmtk-core) and my experience implementing it into our own Rust-based intepreters.
+We talk about Rust a lot here, but we forgo a lot of its guarantees, for better or for worse, but definitely for performance. To be clear, these are research projects and not production systems.
 
 The goal of this blog post is to remain accessible, such that people with limited knowledge of GC or of Rust can still get value out of it.
-If you really want it, you can jump directly to the [MMTk introduction](#whats-mmtk-then) or [the technical implementation bits](#implementation-mmtking) and it will not hurt my feelings.
+If you really want, you can jump directly to the [MMTk introduction](#mmtk-overview) or [the technical implementation bits](#implementation-mmtking) and it will not hurt my feelings.
 
 ## introduction: who? what?
 
@@ -26,7 +26,7 @@ You can check out RebenchDB in action and all of my results for yourself [here](
 ### the rest of the what ("what have i been doing")
 It's been ages since the previous blog post (six months / 7 years or so in dog years), so a lot of things happened, most of which are described in a daunting amount of commits.
 
-The performance of both our AST and BC interpreters is much, much better: something like 100% (yeah!) for the AST and 70% for the BC. Both interpreters have been worked on extensively and even undertook major reworks, a lot of which are explained by this blog post's subject: we now do garbage collection using MMTk, instead of relying on reference counting. To show off the performance from the GC changes specifically:
+The performance of both our AST and BC interpreters is much, much better: something like 100% (yeah!) for the AST and 70% for the BC. Both interpreters have been worked on extensively and even undertook major reworks, a lot of which are explained by this blog post's subject: we now do garbage collection using MMTk, instead of relying of doing it using reference counting. To show off the performance from the GC changes specifically:
 <!--
 I could show them here but I'd rather hold off on addressing them for now, since there's potentially very interesting results for my own research I'd like to expand on in the future (and/or check if I'm messing something up somewhere before drawing conclusions). But at this present moment, AST and BC performance are very similar.
 I can motivate this blog post by showing the performance we got from adopting tracing GC using MMTk, though! -->
@@ -52,9 +52,11 @@ We were using smart pointers a lot since they also tend to *own* the data they r
 The basic case is a `Box<T>`: it's just a pointer to the heap, prettified and wrapped by Rust.
 OK, SOM is object-oriented and so has `Class` objects, which we represent with Rust structs. Say in our interpreters any pointer to a `Class` object will be a `Box<Class>`. Instances of this class (`Instance` objects, also Rust structs) need a `Class` pointer to read static variables from it and... oh wait, [Rust ownership rules](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html) say that data has a single *owner*. But we want each `Instance` to own a reference to the same `Class`, which is shared ownership, so a standard `Box<T>` doesn't cut it.
 
-So `Rc<T>` (which stands for *reference counting*) comes to the rescue: data can be referenced in several places, since we keep track of its users through a counter. When that counter reaches 0, the final user of that `Rc<T>` has sadly passed away, the data is no longer needed and so it's discarded.
+So `Rc<T>` (which stands for *reference counting*) comes to the rescue: data can be referenced in several places, since we keep track of its users through a counter. When that counter reaches 0, the final user of that `Rc<T>` has sadly passed away, the data is no longer needed and so it's discarded. Or put another way: we now know the data is garbage, and it gets automatically collected.
 
-And these `Class` SOM objects have static variables, so we need mutable access to them, which is what `RefCell<T>` provides.
+Using `Rc<T>` is then a form of *garbage collection*, and one that's very easy to implement and work with.
+
+To give our pointer type a final tweak, these `Class` SOM objects have static variables, so we need mutable access to them, which is what `RefCell<T>` provides.
 So the final pointer type we choose: `Rc<RefCell<T>>`. Very nice.
 
 We can successfully access and modify pesky types like `Class` from many different places and so we have working interpreters, Rust manages all the memory for us and is happy, and we're happy because Rust is happy and automatically manages all the memory for us and because Rust is happy. Everyone and everything is happy.
@@ -65,14 +67,16 @@ So pointer access is *slow*, and we do a lot of it.
 But we need some sort of garbage collection to manage our memory, and if reference counting doesn't cut it, what can we do instead?
 
 ## tracing garbage collection
-Tracing garbage collection (referred to as just "GC" from now on) is another form of automatic memory management. It looks through all objects to determine which ones should be discarded.
+Tracing garbage collection is another form of automatic memory management. It looks through all objects to determine which ones should be discarded.
 Our objects are all a big graph that starts with several *roots*, and GC *traces* it to see which objects are *reachable*: if you can no longer be found in the graph, you're no longer in use and in the garbage you go.
 
 Reference counting has to check whether or not to discard an object everytime we stop using a reference to it.
 Tracing GC just waits until we run out of memory, in which case we stop the world to stop running our code so that we can safely trace the object graph without it being modifiable mid-analysis[^stop-the-world].
 
-Added benefit, which turns out to be a major performance win in our case: we manage our data on our own heap, not letting Rust do it.
-This is obviously harder to work with since we ditch [ownership](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html) entirely, which is a core Rust feature. But now allocation much faster by default: we always keep a pointer to the next free element in the heap, and allocation is just bumping it up by the requested amount.
+Reality isn't as simple as "reference counting is slow, tracing GC is fast", to be clear. Garbage collection is a massive field that's been around for longer than you've been alive (author's note: educated guess). You can find state-of-the-art reference counting collectors such as [LXR](https://www.steveblackburn.org/pubs/papers/lxr-pldi-2022.pdf), and [hybrid counting/tracing approaches](https://dl.acm.org/doi/pdf/10.1145/1035292.1028982) do exist. We're not concerned with very advanced GC algorithms in our case, though: we don't need state-of-the-art GC, but to move away from one of the simplest and slowest forms of garbage collection (naive reference counting).
+
+In fact, the bulk of our performance of our performance gain isn't from fancy GC but more from ditching `Rc<T>` to directly manage our own allocations on our own heap.
+This is harder to work with since we dismiss [ownership](https://doc.rust-lang.org/book/ch04-01-what-is-ownership.html) entirely, which is a core Rust feature, but now allocation can be made much faster. For GC algorithms that use a bump allocator, we can simply always keep a pointer to the next free element in the heap, and have allocation simply be bumping it up by the requested amount.
 
 <a name="bump-allocator"></a>
 ```rust
@@ -82,27 +86,27 @@ if new_cursor < self.alloc_bump_ptr.limit {
     self.alloc_bump_ptr.cursor = new_cursor;
     addr
 } else {
-    panic!("out of space, we need to collect garbage first")
+    todo!("out of space, we need to collect garbage first")
 }
 ```
 (code simplified from [an example in the MMTk docs](https://docs.mmtk.io/portingguide/perf_tuning/alloc.html#option-3-embed-the-fast-path-struct))
 
-And as it turns out, even without implementing any garbage collection algorithm, we get a lot of performance[^nogc-performance] just from ditching reference counting and having faster allocation! If we manage our heap, but we set no upper limit to its size and we keep increasing it when it becomes full, then...
+So if we manage our own heap, but we set no upper limit to its size and we keep increasing it when it becomes full, then...
 ![bde96ba315406117f87c3246310f6e990df557d4..be7d7c13cd789f2b977aaa66817c2690ec3c005f](/assets/mmtk/nogc-speedup.png)
 
-Pretty damn good speed just from ditching reference counting! But we've got no garbage collection happening.
+Pretty damn good speed just from ditching `Rc<T>`! But we've got no garbage collection happening.
 This means to function for any program, we need an infinitely-sized heap, and right now for longer-running benchmarks our interpreters keep requesting more and more memory until the [OOM killer](https://linuxhandbook.com/oom-killer/) comes in with the steel chair. And to be fair, I *think* [RAM prices are going down](https://pcpartpicker.com/trends/price/memory/), so maybe 1 billion gigs of RAM will be a reasonable ask in 2-3 years.
 
-But until then, we need to actually periodically collect all that accumulating garbage in the heap, and that's when MMTk comes in.
+But until then, we need to actually periodically collect all that accumulating garbage in the heap, and that's why we need some nice, efficient GC.
 
-## tracing gc is hard
+## GC is hard
 
-Tracing GC is known for being *very* hard to implement. Which at a glance may sound counterintuitive: the naive assumption is that you "just" need to:
+When stepping away from approaches like naive reference counting, it turns out that garbage collection is pretty damn hard to implement. Which at a glance may sound counterintuitive: the naive assumption is that you "just" need to:
 - implement your own heap and a simple memory allocator for it
 - some algorithm to collect the garbage
 - and some way to scan that memory for data.
 
-And sure, reference counting was pretty much free by being handled just with an `Rc` type, but this doesn't sound awful, probably.
+And sure, our naive `Rc<T>` approach was pretty much effort-free, but this doesn't sound awful - probably.
 
 The devil's in the details, though. All three of these parts need to be sturdy for everything not to explode, and debugging any can be an ordeal. Your memory allocator has a bug and fails but *only* after a hundred thousand allocations? That's rough, buddy. Now imagine if the bug *also* only happened *sometimes*, and you've got a certified #classic GC bug[^gc-bug]. Also in the real world, that scanning part is *extremely* difficult in many cases, but hopefully our small virtual machine can be mostly fine.
 
@@ -112,18 +116,20 @@ So looking back at our list, it sure would be nice if there was a language-agnos
 
 ## mmtk overview
 
-The project has been around since 2004. [Here's a great short video introduction](https://www.youtube.com/watch?v=0mldpiYW1X4).
-Through MMTk's API and bindings, you can incorporate any of several pre-existing *plans* (garbage collection algorithms - mark and sweep, semispace, etc.) into your VM, or create your own plan. So you can easily support various GC algorithms, as opposed to tightly coupling your VM to any chosen GC approach; and all this in any language, AND while being fast. It's really, really cool stuff.
+The project has been around since 2004. [Here's a great, short video introduction](https://www.youtube.com/watch?v=0mldpiYW1X4).
 
+Through MMTk's API and bindings, you can incorporate any of several pre-existing *plans* (garbage collection algorithms - mark and sweep, semispace, etc.) into your VM, or create your own plan. So you can easily support various GC algorithms, as opposed to tightly coupling your VM to any chosen GC approach; and all this in any language, AND while being fast. It's really, really cool stuff.
 It's got sturdy bindings for [OpenJDK](https://github.com/mmtk/mmtk-openjdk), [V8](https://github.com/mmtk/mmtk-v8), among others like for [Julia](https://github.com/mmtk/mmtk-julia) or [Ruby](https://github.com/mmtk/mmtk-ruby), so it clearly works with much larger virtual machines than mine.
 
 My reasoning behind choosing MMTk for som-rs was:
-- the promise of good performance. Most Rust GC libraries usually focus more on safety, but that's unfortunately a secondary concern for this work.
+- the promise of high performance, which is a high priority for us.
 - the ability to easily switch between different GC strategies, because modularity makes me happy and so that I have the ability to evaluate the performance impact of different algorithms on my work if I want.
 - *not* having to implement these GC strategies myself, since I *know* this would take me ages. I'm more used to [metacompilation systems](https://stefan-marr.de/papers/oopsla-larose-et-al-ast-vs-bytecode-interpreters-in-the-age-of-meta-compilation/) giving me GC for free than me implementing it myself...
 - It is written in Rust! The previously mentioned bindings needed to deal with [FFI](https://en.wikipedia.org/wiki/Foreign_function_interface), but *we* sure don't.
 
-Though with regards to it not taking ages to implement, software is war[^software-is-war] and all warfare is based on deception: therefore I unfortunately deceived myself with unreasonably short time estimates, and implementing GC did in fact took me several months (oops). Though work on it was on and off, and the bulk of my time was spent on debugging classic GC implementation mistakes. This is a major motivation for this blog post: sharing my experience and my code, to help others get up to speed faster than I did.
+Though with regards to it not taking ages to implement, software is war[^software-is-war] and all warfare is based on deception: therefore I unfortunately deceived myself with unreasonably short time estimates, and implementing GC did in fact took me several months (oops).
+
+Though work on it was on and off, and the bulk of my time was spent on debugging classic GC implementation mistakes. This is a major motivation for this blog post: sharing my experience and my code, to help others get up to speed faster than I did.
 
 All warfare is also based on planning, so the game plan was:
 - get a basic *mark-and-sweep* GC working: it traverses the graph, finds and marks the garbage, sweeps it.
@@ -140,11 +146,11 @@ pub struct Gc<T>(*mut T);
 ```
 
 This mean we don't leverage Rust's safety guarantees at all: it's raw pointer city, and that sucks.
-There's many blog posts on garbage collection out there that describe smart approaches where lifetimes are used: you can read about Saoirse's [shifgrethor](https://without.boats/blog/shifgrethor-iii/),
+There's many blog posts on garbage collection out there that use more clever pointer types, like Saoirse's [shifgrethor](https://without.boats/blog/shifgrethor-iii/),
 Core Dumped's [Emacs Lisp VM](https://coredumped.dev/2022/04/11/implementing-a-safe-garbage-collector-in-rust/)
 or kyren's [gc-arena](https://kyju.org/blog/rust-safe-garbage-collection/).
 
-We don't, since it was already a *major* hurdle to get my interpreters working correctly with tracing GC. This interpreter is just a solo dev research project with neither unlimited funding nor time, so I sometimes cut corners so long as performance is optimal.
+We don't, since it was already a *major* hurdle to get my interpreters working correctly with tracing GC, and I'm not sure how I'd add nice lifetimes to them. These interpreters are a solo dev research project with neither unlimited funding nor time, so I sometimes cut corners so long as performance is optimal.
 
 Anyway, we've now got our own heap pointer wrapper. Thanks to Rust's type system, we can implement `Deref`/`DerefMut` on it to be able to access its underlying data as if it were a `&T`/`&mut T`, avoiding a *lot* of boilerplate code and making it a proper smart pointer.
 
@@ -168,9 +174,8 @@ let bad_ptr: Gc<usize> = Gc::from(4242);
 let a: usize = *bad_ptr + 1; // will break! pointer found to be invalid.
 ```
 
-This is especially a godsend when using garbage collection plans that can move your data around: if our safety check sees you're pointing to data that has since been moved, you forgot to update that pointer when moving, and you've got a bug.
+This is a godsend when using garbage collection plans that can move your data around: if our safety check sees you're pointing to data that has since been moved, you forgot to update that pointer when moving, and you've got a bug[^forwarding-pointer].
 More on moving GC later.
-(Note for MMTk devs: it would then be a forwarding pointer, but the indirection would be a slowdown, so we want everything copied onto the new heap)
 
 <!--
 We've now got full control over our object heap, so we can really do whatever. As an example, since we've also got immutable lists in our interpreter, nothing is stopping us from turning a `Gc<Vec<T>>` into a custom `GcSlice<T>` type:
@@ -181,7 +186,7 @@ pub struct GcSlice<T>(Gc<T>);
 
 ## implementation: mmtk'ing
 
-Now, let's explore the API.
+Now, let's explore the API. You are expected to memorize everything in this section and there will be a test at the end - or you *could* skim through it if you're not looking to implement it yourself.
 
 <!-- Let's explore the API in more detail. I asked for feedback on this blog post and one question I got asked for this specific section was:
 > I don't need to understand this, right?
@@ -189,10 +194,9 @@ Now, let's explore the API.
 The answer is to which is A) how dare you, B) you don't *have* to memorize every API call. -->
 
 MMTk provides the very helpful [DummyVM](https://github.com/mmtk/mmtk-core/tree/master/docs/dummyvm) to showcase interactions with its API ([described here](https://docs.mmtk.io/api/mmtk/memory_manager/index.html)), which I used as a base - and you probably should too.
-It assumes we want to do FFI, and so has a lot of e.g. `extern "C"`, but we don't even need that since we never exit Rust.
-This won't be a thorough overview since I don't need to fully leverage MMTk's features, more like a starting point.
+It assumes we want to do FFI, and so has a lot of e.g. `extern "C"`, but we don't even need all that since we never exit Rust.
 
-To interact with MMTk, we need to create an MMTk instance. For that, we create a builder with our chosen options and our pre-existing `MarkSweep` plan, then we call `mmtk_init::<SOMVM>(&builder)` to get a nice `MMTK<SOMVM>` instance.
+To interact with MMTk, we need an MMTk instance. For that, we create a builder with our chosen options and our pre-existing `MarkSweep` plan, then we call `mmtk_init::<SOMVM>(&builder)` to get a nice `MMTK<SOMVM>`.
 
 We also need to declare a *mutator*, a per-thread data structure to manage allocations, so an incredibly important one.
 We call `mmtk_bind_mutator` to ask MMTk to please give us a `Mutator<SOMVM>` for our current and only execution thread, which we'll store and use to allocate memory. And now we're all sorted.
@@ -223,8 +227,7 @@ And now there's a lot going on. Here's what everything means:
   - `stop_all_mutators`: stop all mutator threads. We've only got one and `block_for_gc` has already stopped it, so we just tell MMTk to go ahead.
   - `spawn_gc_thread`: spawn a thread that MMTk will used for GC. In our case, just a glorified `std::thread::spawn` call.
   - `resume_mutators`: notify that same `CondVar` that GC has occurred, and that we can go back to executing our code.
-- `VMActivePlan`: methods for the current plan [Question for MMTK authors: I find that a bit unclear - I think the name confuses me. How are mutators related to the plan in specific ways?].
-  - just has methods to tell MMTk how to access mutators, so we happily provide it our stored `Mutator<SOMVM>` reference.
+- `VMActivePlan`: methods to tell MMTk how to access mutators, to which we happily provide it our stored `Mutator<SOMVM>` reference.
 - `VMReferenceGlue`: for reference processing (like weak references) and finalizers.
 - `VMSlot`: a `Slot` is roughly just a reference to an object. MMTk provides `SimpleSlot` which works for most cases, but we did need to make our own `SOMSlot` here (explained [in a later bit](#slots-first-mention))
 - `VMMemorySlice`: to represent abstract memory slices. As the "unimplemented" indicates, I never implemented that either, though.
@@ -306,7 +309,7 @@ pub struct Block {
 Both `frame` and `blk_info` are pointers. When moving GC happens, the frame and method referenced will change addresses, so these fields need to be updated.
 So we essentially report both `&mut blk.frame` and `&mut blk_info` (so `&mut Gc<T>` types, equivalent to a `*mut Address`) as slots, and MMTk takes care to update the references.
 
-As seen in the code our roots are pretty much just A) our frames and B) our global variables.
+As seen in the code, our roots are pretty much just A) our frames and B) our global variables.
 We declare our globals as roots by iterating over the vector that contains them, which makes sense, but how come we only report one of our many language frames?
 
 That's because our second scanning function `scan_object`, which is in charge of scanning any of our types, will take care of the rest. We've reported a frame object as a root to the object graph,
@@ -357,7 +360,7 @@ We use `Value` to represent any, well... value. That's a boolean, an integer, or
 We used to represent it as an enum like this.
 
 ```rust
-pub enum ValueEnum {
+pub enum Value {
     Nil,
     Boolean(bool),
     Integer(i32),
@@ -368,7 +371,7 @@ pub enum ValueEnum {
 }
 ```
 
-...which was *fine*, but not as efficient as it could have been. A value was then 16 bytes: the biggest value possible was an 8 byte pointer, and we need metadata to store its type, requiring an extra 8 bytes for alignment reasons.
+...which was *fine*, but not as efficient as it could have been. A value was then 16 bytes: the biggest value possible was a pointer, so 8 bytes, but we need metadata to store its type, requiring an extra 8 bytes for alignment reasons.
 Which again is *fine*, but we can do better. Since in practice pointers don't actually need all 8 bytes they're given, we can use [NaN boxing](https://leonardschuetz.ch/blog/nan-boxing/)
 to make both a pointer and its type fit all in 8 bytes, and sneak in more performance that way.
 
@@ -462,9 +465,9 @@ Until that happens, we can play fast and loose with object permanence and just a
 Here's a couple of bugs that manifested into reality in the past, though, nicely categorized. And everyone likes a list, so here's a top 3.
 
 ### number 3: badly copying
-If it wasn't already clear we disregard Rust a lot for the sake of performance, let's talk about our `Frame`s having self-referential pointers (ew).
+If it wasn't already clear that for the sake of performance, we'd not exactly been writing the most idiomatic Rust code, let's talk about our `Frame`s having self-referential pointers (ew).
 
-When we allocate frames, we know how many `Value`s they're going to need: we know how many arguments and local variables there are in the scope a frame represents, and for our stack-based bytecode interpreter, we've precomputed the maximum stack size possible when executing their associated bytecode. So we can give them all a (N times `Value`)-sized little heap of their own like `[(maybe Stack)|Arguments|Locals]`, for fast access and hopefully make [our CPU cache happier](https://en.wikipedia.org/wiki/Locality_of_reference), which we store directly after the `Frame` so that we can do one single, bigger allocation.
+When we allocate frames, we know how many `Value`s they're going to need: we know how many arguments and local variables there are in the scope a frame represents, and for our stack-based bytecode interpreter, we've precomputed the maximum stack size possible when executing their associated bytecode. So with N total values, we can give them all an N-times-`Value`-sized little heap of their own like `[(maybe Stack)|Arguments|Locals]`, for fast access and hopefully make [our CPU happier](https://en.wikipedia.org/wiki/Locality_of_reference), which we store directly after the `Frame` so that we can do one single, bigger allocation.
 
 I'd made the frames store pointers to the areas of their mini heap that contain arguments and locals respectively, for faster access to them. Now I'm actually not positive it's a strict speedup over frequently doing `frame_ptr + size_of::<Frame>() + (stack_len * size_of::<Value>())` at runtime to access arguments/locals, but that was the assumption.
 
@@ -481,11 +484,11 @@ That was an occasional issue in our `MarkSweep` collector, though not incredibly
 
 Now consider a moving collector: *any* reference not found by GC is now incorrectly pointing to the wrong heap. Sneakily, a lot of the time, that's enough to work for longer than you'd think: we don't erase the old heap[^erase-old-heap], so it still contains valid data that you can mistakenly access.
 
-Consider a case where you can forget to update *some* pointers to the variable `foo`. You can do a `foo = false` operation only to have an `assert foo = true` work just fine shortly afterwards: because you accidentally wrote `false` to where `foo` *was*, on the old heap, while it's actually equal to `true` on the new, correct heap. And then if GC happens a second time and swaps both spaces again, your incorrect pointer to `foo` into what was the old heap is now a valid pointer into the current heap, but now to some random data in it and so all hell does break loose.
+Consider a case where you forget to update *some* pointers to the variable `foo`. You can do a `foo = false` operation only to have an `assert foo = true` work just fine shortly afterwards: because you accidentally wrote `false` to where `foo` *was*, on the old heap, while it's actually equal to `true` on the new, correct heap. And to bend your brain more, if GC happens a second time and swaps both spaces again, your incorrect pointer to `foo` into what was the old heap is now a valid pointer into the current heap, but now to some random data in it and so all hell does break loose.
 
-These bugs are why `debug_assert_valid_heap_ptr` (our macro mentioned much earlier that checks pointers point into the right heap) was made, and why it's a godsend. Adding it to `Deref` checks every pointer access and you can easily identify pointers you missed when scanning.
+These bugs are why `debug_assert_valid_heap_ptr` (our macro mentioned much earlier that checks pointers point into the right heap) was made, and why I am proud to call it a dear friend. Adding it to `Deref` checks every pointer access and you can easily identify pointers you missed when scanning.
 
-The BC interpreter is mostly fine since it's stack-based and just about every `Value` ends up pushed on an easily-accessible self-created stack. But the AST interpreter doesn't fare as well, since it was making extensive use of the Rust stack. As an example, here's how we dispatch a method with two arguments:
+The BC interpreter is mostly fine since just about every `Value` in it ends up pushed on an easily accessible custom stack. But the AST interpreter doesn't fare as well, since it was making extensive use of the Rust stack. As an example, here's how we dispatch a method with two arguments:
 
 ```rust
 impl Evaluate for TernaryDispatchDispatchNode {
@@ -500,9 +503,9 @@ impl Evaluate for TernaryDispatchDispatchNode {
 ```
 
 We evaluate the method's receiver, the two arguments we want to call it with, and then we dispatch it. Simple enough.
-But we need to consider than any `evaluate` call can trigger GC: if evaluating `arg1` or `arg2` triggered a collection, then the `receiver` pointer is now wrong: it was in a local variable on the Rust stack, which scanning cannot detect.
+But we need to consider than any `evaluate` call can trigger GC: if evaluating `arg1` or `arg2` triggered a collection, then the `receiver` pointer is now wrong: it was in a local variable on the Rust stack, which scanning cannot find.
 
-The current fix is pretty ugly, as well as slightly slower: we keep a big `Vec<Value>` stack, and all variables we work with are pushed onto it, instead of being isolated in local variables. Then GC just checks/updates everything in that big self-made stack.
+The current fix is pretty ugly, as well as slightly slower: we keep a big `Vec<Value>` stack, and all variables we work with are pushed onto it, instead of being stranded as local variables. Then GC just checks/updates everything in that big self-made stack.
 
 <!-- LLVM does seem to be able to [find GC roots on the stack](https://llvm.org/docs/GarbageCollection.html#gcroot), so Rust could theoretically support it.  -->
 
@@ -541,7 +544,7 @@ A bit simplified for your viewing pleasure. What we do is:
 - we pop arguments off the previous frame [^args-off-prev-frame]...
 - ...and write them to the new one (plus other unimportant post allocation stuff)
 
-The incorrect behavior is: in some cases, when we trigger GC here, the `prev_frame` argument does not get correctly adapted by the GC. So `args` ends up wrong, `Frame::init_frame_post_alloc` is given an incorrect pointer, and we messed up.
+The incorrect behavior is: in some cases, when we trigger GC here, the `prev_frame` argument still points to the old heap, having seemingly not been correctly adapted by GC. So `args` that reads from it ends up being wrong, `Frame::init_frame_post_alloc` is given an incorrect pointer, and things break later.
 The question is now: *why*?
 
 Clearly, `prev_frame` is not properly reported to MMTk and doesn't get moved. Simple, except it's wrong: this `Frame` very much does get moved.
@@ -559,7 +562,7 @@ pub fn alloc_frame_from_method(...) -> Gc<Frame> {
     // ...
 ```
 
-[`std::hint::black_box`](https://doc.rust-lang.org/std/hint/fn.black_box.html). Which does:
+[`std::hint::black_box`](https://doc.rust-lang.org/std/hint/fn.black_box.html). Which is:
 > An identity function that hints to the compiler to be maximally pessimistic about what black_box could do.
 
 Basically, we tell the compiler not to optimize based on `prev_frame`.
@@ -580,11 +583,16 @@ And then I was given [this link to notes by Manish Goregaokar](https://gist.gith
 This is most likely the culprit, and exactly the kind of thing I would have loved to know months ago.
 As to why it doesn't break for the similar type `&Gc<Method>` next to it, or it only being in a few benchmarks, who knows...
 
-Interestingly, I'm not sure a raw pointer actually fixes the problem. Out of the few that break without the `black_box` call... only one is fixed by using a raw pointer instead of a reference? So this exemplifies more Rust optimizations not really caring about the possibility of GC.
-This is the kind of thing that you'd find in the language spec, with the exception that there's no proper spec out for Rust at the moment (there's a [team working on one, though](https://blog.rust-lang.org/inside-rust/2023/11/15/spec-vision.html)).
+Hell, I'm not even sure that a raw pointer instead of a reference actually fixes that problem. Out of the few benchmarks that break without the `black_box` call... only one is fixed by using a raw pointer instead? So this exemplifies more that Rust optimizations are really not aware, or caring, about the possibility of moving GC.
 
-These bugs all make me grateful that I at least don't have to handle the GC algorithm logic: I have the trusted MMTk implementations of GC algorithms that I can rely on.
-So trusted, in fact, that I've not found bugs in them. All of the discussed bugs in my VM have been of my own doing! Which is great for MMTk and for users, and I realize that saying "I messed up in many ways" is not so great for me. Oops, but still.
+So this makes me very much aware that Rust might choose to break my GC implementation in future releases. I would rather not be forced to not update my Rust compiler, and I'd rather not have to go back to using C++...
+
+This is the kind of thing that you'd find in the language spec, with the exception that there's no proper spec out for Rust at the moment. [There's a team working on one](https://blog.rust-lang.org/inside-rust/2023/11/15/spec-vision.html), though, and I'm very much looking forward to it. I hope it's of help to future people who want high-performance GC in Rust.
+
+But anyway.
+
+On the bright side, these three categories of bugs all make me grateful that I at least don't have to handle the GC algorithm logic: I have the trusted MMTk implementations of GC algorithms that I can rely on.
+Trustworthy, in fact, since I've not found bugs in them myself: all of the bugs discussed above in my VM have been of my own doing (yay?).
 
 ## some technical disclaimers
 
@@ -592,22 +600,24 @@ Before finishing up: there's a lot we didn't try and there's a lot we don't supp
 
 - we never explicitly do finalization. That's a usually major point of complexity when doing GC, and to be honest one that I'm all too happy to circumvent.
 - arbitrary data on the Rust heap can't reference `Gc<T>` pointers. We can store `Gc<T>` types on the Rust heap if we know exactly where to find them (e.g. `Universe.current_frame`), but we never get into any situations where we would want to do any sort of tracing in the Rust heap itself to find our data.
-This isn't enforced: you *could* make and use a `Box<Gc<T>>`, but your computer *would* explode after GC happens. As far as I'm aware, it's impossible to enforce without modifying Rust itself.
+  - This isn't enforced: you *could* make and use a `Box<Gc<T>>`, but your computer *would* explode after GC happens. As far as I'm aware, it's impossible to enforce without modifying Rust itself.
 - our interpreters are single-threaded. Making GC work with multi-threaded interpreters is likely to add more bugs, and more work.
 
 ## in conclusion
 We saw:
 - a rough overview of garbage collection
 - how you *can* make it work with Rust (and how Rust can sometimes hate it)
-- and how one would implement it using MMTk.
+- and more specifically, how one would implement it using MMTk.
 
 GC is a complex topic, so that took a while and I still wasn't thorough at all.
 
 MMTk is a great concept with clearly solid execution, about which you've hopefully now got enough knowledge to get started more more easily.
-It does a good chunk of my job for me, though the complexities of GC are still apparent even when using it, and there's still a myriad of ways to mess up. Which is why you've hopefully learned from some of my own mistakes!
+It does a large chunk of my job for me, though the complexities of GC are still apparent when using it, sp there's still a myriad of ways to mess up. Which is why you've hopefully learned from some of my own mistakes!
 
 My own implementation could use a *lot* more work and has some hacky bits, but it sure does make my interpreters run, and it should serve as a nice starting point.
 You can find the latest version of it [here](https://github.com/OctaveLarose/som-rs/tree/master/som-gc).
+
+This whole thing took a while to write, so I'd like to thank [Stefan Marr](https://stefan-marr.de/) for the feedback, and the MMTk team for both proofreading and the helping hand when implementing their framework.
 
 Thanks for reading if you did. If you didn't, I'm not thanking you, but you still have my respect.
 
@@ -616,14 +626,15 @@ Goodbye for now
 ---
 
 [^procrastination]: I *might* write a more thorough analysis of each experiment of mine in the future if I muster the courage to dig through all my data + if I can make it interesting. And look, you yourself also procrastinate by implementing new features instead of fixing bugs. <!-- We are kindred spirits, you and I. -->
-[^stop-the-world]: Some GCs don't stop the world, but that's a whole other level of complexity so we don't do it. There's no reason you couldn't use MMTk for that, though. [Question for MMTk authors: can you give an example, please? Or am I mistaken somehow?]
+[^stop-the-world]: Some GCs don't stop the world, but that's a whole other level of complexity so we don't do it. There's no reason you couldn't use MMTk for that, though.
 [^nogc-performance]: Actually unsure why the AST benefited less, but I would assume that's due to it being a lot slower at the time, so GC solving only -some- of its performance problems and so having a lower overall impact.
 [^software-is-war]: On a metaphysical level, everything is war and love - probably. I had philosophy classes back in high school, so I must know what I'm talking about.
 [^scan-object]: I'm thinking the best way would be to have each object implement some `VisitByGc` trait with their associated visit logic, to associate each `ObjMagicId` with a given type in a nice way and to do dynamic dispatch. Another TODO for the future...
 [^args-off-prev-frame]: Which, by the way, is how we keep those arguments reachable when GC happens. They're not on the Rust stack, but safe in the previous frame. That's also why we only pop them *after* GC might have occurred.
 [^gc-bug]: If that happens, I hope you're well aware of [record and replay debugging](https://rr-project.org/).
-[^mmtk-header]: In some cases the type information is encoded in the object, which we could definitely use. Alternatively, there might be some free space in the object headers MMTk creates for its own purposes?
-[^erase-old-heap]: I learned too late that in non-release builds, you really should erase the old heap by overriding it with e.g. `0xdeadbeef` for easier debugging. Though my macro that checks pointers achieves the same effect.
+[^mmtk-header]: In some cases the type information is encoded in the object, which we could definitely use.
+[^erase-old-heap]: I learned too late that in non-release builds, you really *should* erase the old heap by overriding it with recognizable values like `0xdeadbeef` for easier debugging. Though my debug macro that checks pointers does achieve a similar effect anyway.
+[^forwarding-pointer]: OK, technical clarification for people familiar with GC: it could still very much work since you'd find a forwarding pointer on the old heap which you *could* use to access the new data, but that indirection would be a slowdown, so we want everything copied onto the new heap without exception to maintain fast access to it.
 
 <!--
 // https://source.chromium.org/chromium/chromium/src/+/main:v8/src/heap/base/asm/x64/push_registers_asm.cc;l=33;bpv=1;bpt=0
