@@ -1,13 +1,13 @@
 ---
 layout: post
-title: "Using unsafe in our Rust interpreters: easy, debatably ethical performance"
+title: "Using unsafe in our Rust interpreters"
 author:
 - Octave Larose
 ---
 
 ## a disclaimer:
 
-This article garnered a lot of attention for my use of the word `unsafe`. Frankly it's my bad for using terms like "debatably ethical" in a tongue-and-cheek way when it's in fact hardly unethical: no one but myself is affected by potential `unsafe` bugs, as this post is just about a research project (with 1, sometimes 2 people working on it). I'm not a company, we have no users, I'm just working on my research on interpreter performance: and since performance matters, `unsafe` has benefits for me.
+This article garnered a lot of attention for my use of the word `unsafe`. Frankly it's my bad for using terms like "debatably ethical" (in the original title) in a tongue-and-cheek way when it's in fact hardly unethical: no one but myself is affected by potential `unsafe` bugs, as this post is just about a research project (with 1, sometimes 2 people working on it). I'm not a company, we have no users, I'm just working on my research on interpreter performance: and since performance matters, `unsafe` has benefits for me.
 
 If you think I'm definitely abusing the `unsafe` keyword though, please let me know! Feedback is always appreciated and I'd love to avoid it you can provide potential alternatives.
 
