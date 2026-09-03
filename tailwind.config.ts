@@ -8,6 +8,7 @@ export default {
 				DEFAULT: {
 					css: {
 						a: {
+							fontWeight: "600",
 							textUnderlineOffset: "2px",
 							"&:hover": {
 								"@media (hover: hover)": {
