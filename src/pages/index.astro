@@ -1,0 +1,106 @@
+---
+import { type CollectionEntry } from "astro:content";
+import PostPreview from "@/components/blog/PostPreview.astro";
+import SocialList from "@/components/SocialList.astro";
+import { getAllPosts } from "@/data/post";
+import PageLayout from "@/layouts/Base.astro";
+import { collectionDateSort } from "@/utils/date";
+
+const allPosts = await getAllPosts();
+const allPostsByDate = allPosts.sort(collectionDateSort) as CollectionEntry<"post">[];
+const posts = allPostsByDate;
+---
+
+
+<PageLayout meta={{ title: "Home" }}>
+	<section class="mb-20">
+		<p class="text-accent mb-4">Programming languages - Compilers - Systems</p>
+		<h1 class="title mb-8">Octave Larose</h1>
+		<p class="mb-6 max-w-2xl text-lg leading-relaxed">
+			I research how to make programming language interpreters faster, with a focus on AST
+			interpreters, meta-compilation, and runtime systems.
+		</p>
+		<SocialList />
+	</section>
+	<section class="mb-20 scroll-mt-8" id="about">
+		<h2 class="title text-accent mb-6 text-xl">About me</h2>
+		<div class="prose prose-sm prose-cactus max-w-2xl">
+			<p>
+				I'm Octave. I'm currently a PhD student at the <a href="https://www.kent.ac.uk/">University
+				of Kent</a>, working within the <a href="https://research.kent.ac.uk/programming-languages-systems/">Programming
+				Languages and Systems group</a>.
+			</p>
+			<p>
+				I do Programming Language Implementation, focusing on AST interpreter performance. We recently
+				got a paper accepted at OOPSLA which summarizes well why my PhD topic is not a waste of time
+				(<a href="https://dl.acm.org/doi/10.1145/3622808">AST vs. Bytecode: Interpreters in the Age of
+				Meta-Compilation</a>)
+			</p>
+		</div>
+	</section>
+	<section class="mb-20 scroll-mt-8" id="writing">
+		<h2 class="title text-accent mb-6 text-xl"><a href="/posts/">Writing</a></h2>
+		<ul class="space-y-4" role="list">
+			{
+				posts.map((p) => (
+					<li class="grid gap-1 sm:grid-cols-[auto_1fr]">
+						<PostPreview post={p} withDate={false} />
+					</li>
+				))
+			}
+		</ul>
+	</section>
+	<section class="mb-20 scroll-mt-8" id="publications">
+		<h2 class="title text-accent mb-6 text-xl">Publications</h2>
+		<ul class="max-w-2xl space-y-8" role="list">
+			<li>
+				<a class="cactus-link font-semibold" href="https://kar.kent.ac.uk/110374/">
+					AST, Bytecode, and the Space In Between: An Exploration of Interpreter Design Tradeoffs
+				</a>
+				<p class="text-muted mt-2">Octave Larose, Michael Vollmer, Stefan Marr</p>
+				<p class="mt-1">ICOOOLPS '25. Accepted for publication in the Journal of Object Technology.</p>
+			</li>
+			<li>
+				<a class="cactus-link font-semibold" href="https://dl.acm.org/doi/pdf/10.1145/3679007.3685058">
+					Towards Realistic Results for Instrumentation-Based Profilers for JIT-Compiled Systems
+				</a>
+				<p class="text-muted mt-2">Humphrey Burchell, Octave Larose, Stefan Marr</p>
+				<p class="mt-1">Proceedings of the 21st ACM SIGPLAN International Conference on Managed Programming Languages and Runtimes, 2024.</p>
+			</li>
+			<li>
+				<a class="cactus-link font-semibold" href="https://dl.acm.org/doi/pdf/10.1145/3622808">
+					AST vs. Bytecode: Interpreters in the Age of Meta-Compilation
+				</a>
+				<p class="text-muted mt-2">Octave Larose, Sophie Kaleba, Humphrey Burchell, Stefan Marr</p>
+				<p class="mt-1">Proceedings of the ACM on Programming Languages, OOPSLA 2023.</p>
+			</li>
+			<li>
+				<a class="cactus-link font-semibold" href="https://dl.acm.org/doi/pdf/10.1145/3617651.3622985">
+					Don't Trust Your Profiler: An Empirical Study on the Precision and Accuracy of Java Profilers
+				</a>
+				<p class="text-muted mt-2">Humphrey Burchell, Octave Larose, Sophie Kaleba, Stefan Marr</p>
+				<p class="mt-1">Proceedings of the 20th ACM SIGPLAN International Conference on Managed Programming Languages and Runtimes, 2023.</p>
+			</li>
+			<li>
+				<a class="cactus-link font-semibold" href="https://kar.kent.ac.uk/93937/1/MoreVMs22_paper_9016%20%281%29.pdf">
+					Who You Gonna Call? A Case Study about the Call-Site Behaviour in Ruby-on-Rails Applications
+				</a>
+				<p class="text-muted mt-2">Sophie Kaleba, Octave Larose, Humphrey Burchell, Stefan Marr</p>
+				<p class="mt-1">DLS 2022: Proceedings of the 18th ACM SIGPLAN International Symposium on Dynamic Languages.</p>
+			</li>
+		</ul>
+	</section>
+	<section class="scroll-mt-8" id="hobbies">
+		<h2 class="title text-accent mb-6 text-xl">Hobbies</h2>
+		<div class="prose prose-sm prose-cactus max-w-2xl">
+			<p>An ever-growing list of interests:</p>
+			<ul>
+  				<li>obsessively climbing big rocks with my hands</li>
+  				<li>obsessively climbing mountains with my feet (and mountains are big rocks)</li>
+  				<li>beating hard videogames</li>
+	  			<li>cooking (hence the garlic!)</li>
+	  			<li>geography (<a href="https://t30.teuteuf.fr/">join us</a>)</li>
+			</ul>
+		</div>
+	</section>
+</PageLayout>

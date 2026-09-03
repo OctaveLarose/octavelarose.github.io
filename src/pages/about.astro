@@ -1,0 +1,29 @@
+---
+import PageLayout from "@/layouts/Base.astro";
+
+const meta = {
+	description: "Octave Larose's personal website.",
+	title: "About",
+};
+---
+
+<PageLayout meta={meta}>
+	<h1 class="title mb-12">About me</h1>
+	<div class="prose prose-sm prose-cactus max-w-none">
+		<p>
+			I'm Octave. I'm currently a PhD student at the <a href="https://www.kent.ac.uk/">University of
+			Kent</a>, working within the <a href="https://research.kent.ac.uk/programming-languages-systems/">Programming
+			Languages and Systems group</a>.
+		</p>
+		<p>
+			I do Programming Language Implementation, focusing on AST interpreter performance. We recently
+			got a paper accepted at OOPSLA which summarizes well why my PhD topic is not a waste of time
+			(<a href="https://dl.acm.org/doi/10.1145/3622808">AST vs. Bytecode: Interpreters in the Age of
+			Meta-Compilation</a>)
+		</p>
+		<p>
+			Otherwise, my many interests include obsessively climbing big rocks, playing hard videogames and
+			being a slightly above average cook
+		</p>
+	</div>
+</PageLayout>
