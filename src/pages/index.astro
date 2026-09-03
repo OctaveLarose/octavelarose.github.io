@@ -13,29 +13,31 @@ const posts = allPostsByDate;
 
 
 <PageLayout meta={{ title: "Home" }}>
-	<section class="mb-20">
-		<p class="text-accent mb-4">Programming languages - Compilers - Systems</p>
-		<h1 class="title mb-8">Octave Larose</h1>
-		<p class="mb-6 max-w-2xl text-lg leading-relaxed">
-			I research how to make programming language interpreters faster, with a focus on AST
-			interpreters, meta-compilation, and runtime systems.
-		</p>
-		<SocialList />
+	<section class="mb-8">
+		<p class="text-accent mb-4">Programming languages - Interpreters - Compilers</p>
 	</section>
-	<section class="mb-20 scroll-mt-8" id="about">
+	<section class="mb-8 scroll-mt-8" id="about">
 		<h2 class="title text-accent mb-6 text-xl">About me</h2>
 		<div class="prose prose-sm prose-cactus max-w-2xl">
 			<p>
-				I'm Octave. I'm currently a PhD student at the <a href="https://www.kent.ac.uk/">University
-				of Kent</a>, working within the <a href="https://research.kent.ac.uk/programming-languages-systems/">Programming
+				I'm a PhD graduate from the <a href="https://www.kent.ac.uk/">University
+				of Kent</a>, where I worked in the <a href="https://research.kent.ac.uk/programming-languages-systems/">Programming
 				Languages and Systems group</a>.
 			</p>
 			<p>
-				I do Programming Language Implementation, focusing on AST interpreter performance. We recently
-				got a paper accepted at OOPSLA which summarizes well why my PhD topic is not a waste of time
-				(<a href="https://dl.acm.org/doi/10.1145/3622808">AST vs. Bytecode: Interpreters in the Age of
-				Meta-Compilation</a>)
+				My work focused on interpreter design and AST interpreter performance. See our 2023 OOPSLA paper - <a href="https://dl.acm.org/doi/10.1145/3622808">AST vs. Bytecode: Interpreters in the Age of Meta-Compilation</a>.
 			</p>
+			<p>
+				I also maintain (<a href="/posts">and occasionally write about!</a>) my fork of <a href="https://github.com/octavelarose/som-rs">som-rs</a>, 
+				a Rust-based interpreter for the SOM language.
+			</p>
+			<p> 
+				I recently worked for Oracle, where I was part of the <a href="github.com/oracle/graalpython">GraalPy</a> team 
+				and worked on <a href="https://github.com/oracle/graal/blob/master/truffle/docs/bytecode_dsl/BytecodeDSL.md"> BytecodeDSL</a>, 
+				which automatically generates a bytecode interpreter from a DSL specification.
+				I focused on reducing memory usage, and improving interpreter performance.
+			</p>
+		<SocialList />
 		</div>
 	</section>
 	<section class="mb-20 scroll-mt-8" id="writing">
@@ -58,7 +60,7 @@ const posts = allPostsByDate;
 					AST, Bytecode, and the Space In Between: An Exploration of Interpreter Design Tradeoffs
 				</a>
 				<p class="text-muted mt-2">Octave Larose, Michael Vollmer, Stefan Marr</p>
-				<p class="mt-1">ICOOOLPS '25. Accepted for publication in the Journal of Object Technology.</p>
+				<p class="mt-1">ICOOOLPS 2025. Accepted for publication in the Journal of Object Technology.</p>
 			</li>
 			<li>
 				<a class="cactus-link font-semibold" href="https://dl.acm.org/doi/pdf/10.1145/3679007.3685058">

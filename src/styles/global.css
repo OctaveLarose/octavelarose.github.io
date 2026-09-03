@@ -64,6 +64,7 @@
 	html {
 		color-scheme: light dark;
 		accent-color: var(--color-accent);
+		--color-image-outline: #e1e4e8;
 		scrollbar-gutter: stable;
 
 		&[data-theme="light"] {
@@ -72,6 +73,7 @@
 
 		&[data-theme="dark"] {
 			color-scheme: dark;
+			--color-image-outline: #3c3f51;
 			--color-global-bg: oklch(23.64% 0.0045 248);
 			--color-global-text: oklch(83.54% 0 264);
 			--color-muted: oklch(70.7% 0.022 261.325);
@@ -121,6 +123,24 @@
 
 	.cactus-link {
 		@apply hover:decoration-link underline underline-offset-2 hover:decoration-2;
+	}
+
+	.prose img {
+		border-radius: 0.25rem;
+		outline: 1px solid var(--color-image-outline);
+	}
+
+	.garlic-logo {
+		rotate: var(--garlic-rotation, 0deg);
+		transition:
+			rotate 500ms ease-in-out,
+			opacity 300ms ease-in-out,
+			filter 300ms ease-in-out;
+	}
+
+	.prose code::before,
+	.prose code::after {
+		content: none !important;
 	}
 
 	.title {

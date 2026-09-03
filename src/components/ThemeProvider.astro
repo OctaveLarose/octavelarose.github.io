@@ -15,6 +15,7 @@
 		}
 
 		const root = document.documentElement;
+		const garlicLogo = document.querySelector("[data-garlic-logo]");
 
 		// root already set to newTheme, exit early
 		if (newTheme === root.getAttribute("data-theme")) {
@@ -22,6 +23,12 @@
 		}
 
 		root.setAttribute("data-theme", newTheme);
+		if (garlicLogo) {
+			const currentRotation = Number(garlicLogo.getAttribute("data-rotation") ?? 0);
+			const nextRotation = currentRotation + 180;
+			garlicLogo.setAttribute("data-rotation", String(nextRotation));
+			garlicLogo.style.setProperty("--garlic-rotation", `${nextRotation}deg`);
+		}
 
 		if (typeof localStorage !== "undefined") {
 			localStorage.setItem("theme", newTheme);

@@ -6,13 +6,13 @@ import { siteConfig } from "../../site.config";
 ---
 
 <header
-	class:list={["group relative mb-28 flex items-center", siteConfig.showLogo && "sm:ps-24"]}
+	class:list={["group relative mb-16 flex items-center", siteConfig.showLogo && "sm:ps-24"]}
 	id="main-header"
 >
-	<div class="flex sm:flex-col sm:items-start">
+	<div class="relative flex sm:flex-col sm:items-start">
 		<a
 			aria-current={Astro.url.pathname === "/" ? "page" : false}
-			class="inline-flex items-center sm:relative sm:inline-block sm:grayscale sm:hover:filter-none"
+			class="inline-flex items-center sm:inline-block"
 			href="/"
 		>
 			{
@@ -20,7 +20,8 @@ import { siteConfig } from "../../site.config";
 					<img
 						alt=""
 						aria-hidden="true"
-						class="me-3 h-12 w-12 object-contain opacity-50 transition-opacity hover:opacity-100 dark:invert sm:absolute sm:-inset-s-24 sm:me-0 sm:h-20 sm:w-20"
+						class="garlic-logo me-3 h-12 w-12 object-contain opacity-50 grayscale hover:opacity-100 hover:grayscale-0 dark:invert sm:absolute sm:-inset-s-24 sm:top-1/2 sm:me-0 sm:h-20 sm:w-20 sm:-translate-y-1/2"
+						data-garlic-logo
 						src="/images/garlic-header.png"
 					/>
 				)
@@ -53,7 +54,7 @@ import { siteConfig } from "../../site.config";
 			aria-haspopup="menu"
 			class="group relative ms-4 h-7 w-7 sm:invisible sm:hidden"
 			id="toggle-navigation-menu"
-			type="button"
+						class="me-3 h-12 w-12 object-contain opacity-75 transition-opacity hover:opacity-100 dark:invert sm:absolute sm:-inset-s-24 sm:top-1/2 sm:me-0 sm:h-20 sm:w-20"
 		>
 			<span class="sr-only">Open main menu</span>
 			<svg
